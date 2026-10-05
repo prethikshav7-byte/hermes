@@ -591,12 +591,12 @@ class TelemetryDetailWidget(QWidget):
         gauges_lay.setSpacing(8)
 
         if self.vehicle_id == VehicleID.ROCKET:
-            # 5 gauges: Alt, Vel, Accel on top row; Press, Temp on bottom row (Image 3)
+            # 5 gauges: Alt, Vel, Acceleration on top row; Press, Temperature on bottom row (Image 3)
             g_alt = CircularGauge("ALTITUDE", 0.0, 2000.0, 200.0, "m", decimals=1)
             g_vel = CircularGauge("VELOCITY", 0.0, 200.0, 20.0, "m/s", decimals=1)
-            g_acc = CircularGauge("ACCEL", -20.0, 20.0, 4.0, "g", decimals=1)
+            g_acc = CircularGauge("ACCELERATION", -20.0, 20.0, 4.0, "m/s", decimals=1)
             g_prs = CircularGauge("PRESSURE", 50000.0, 100000.0, 10000.0, "Pa", decimals=1)
-            g_tmp = CircularGauge("TEMP", -40.0, 80.0, 20.0, "°C", decimals=1)
+            g_tmp = CircularGauge("TEMPERATURE", -40.0, 80.0, 20.0, "°C", decimals=1)
 
             self.gauges["altitude"] = g_alt
             self.gauges["velocity"] = g_vel
@@ -610,11 +610,11 @@ class TelemetryDetailWidget(QWidget):
             gauges_lay.addWidget(self._make_card_frame(g_prs), 1, 0)
             gauges_lay.addWidget(self._make_card_frame(g_tmp), 1, 1)
         else:
-            # 4 gauges (CanSat 2x2): Alt, Descent on top; Press, Temp on bottom (Image 4)
+            # 4 gauges (CanSat 2x2): Alt, Descent on top; Press, Temperature on bottom (Image 4)
             g_alt = CircularGauge("ALTITUDE", 0.0, 2000.0, 200.0, "m", decimals=1)
             g_des = CircularGauge("DESCENT", 0.0, 50.0, 5.0, "m/s", decimals=1)
             g_prs = CircularGauge("PRESSURE", 50000.0, 100000.0, 10000.0, "Pa", decimals=1)
-            g_tmp = CircularGauge("TEMP", -40.0, 80.0, 20.0, "°C", decimals=1)
+            g_tmp = CircularGauge("TEMPERATURE", -40.0, 80.0, 20.0, "°C", decimals=1)
 
             self.gauges["altitude"] = g_alt
             self.gauges["velocity"] = g_des
