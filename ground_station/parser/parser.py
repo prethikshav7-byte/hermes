@@ -82,6 +82,7 @@ class StreamCounters:
     checksum_failed: int = 0
     duplicates: int = 0
     time_regressions: int = 0
+    rf_errors: int = 0
     #: §7.5.2 tier counts.
     dropouts: int = 0
     gaps: int = 0
@@ -92,7 +93,11 @@ class StreamCounters:
     @property
     def rejected_total(self) -> int:
         return (self.malformed + self.checksum_failed
-                + self.duplicates + self.time_regressions)
+                + self.duplicates + self.time_regressions + self.rf_errors)
+
+    @property
+    def total_received(self) -> int:
+        return self.accepted + self.rejected_total
 
 
 @dataclass(frozen=True)
@@ -158,20 +163,28 @@ class VehicleStream:
         # malformed. Checked before anything else touches stream state.
         if self._last_packet_count is not None:
             if packet.packet_count <= self._last_packet_count:
-                self.counters.duplicates += 1
+                if packet.packet_count == self._last_packet_count:
+                    self.counters.duplicates += 1
+                    reason = RejectReason.DUPLICATE
+                    detail = f"duplicate packet_count {packet.packet_count}"
+                else:
+                    self.counters.time_regressions += 1
+                    reason = RejectReason.TIME_REGRESSION
+                    detail = (f"out-of-order packet_count {packet.packet_count} < last "
+                              f"accepted {self._last_packet_count}")
+
                 return IngestResult(
                     packet=None,
                     rejected=RejectedLine(
-                        reason=RejectReason.DUPLICATE,
-                        detail=(f"packet_count {packet.packet_count} ≤ last "
-                                f"accepted {self._last_packet_count}"),
+                        reason=reason,
+                        detail=detail,
                         raw=packet.raw,
                         received_at=packet.received_at,
                         vehicle_id=self.vehicle_id,
                     ),
                 )
 
-        if self._last_mission_time is not None:
+        if self._last_mission_time is not None and packet.mission_time is not None:
             if packet.mission_time < self._last_mission_time:
                 self.counters.time_regressions += 1
                 return IngestResult(
@@ -201,7 +214,7 @@ class VehicleStream:
             self.counters.outages += 1
         self.counters.missing_total += max(0, missing)
 
-        self._window.append((missing + 1, 1))
+        self._window.append((max(1, missing + 1), 1))
         self._last_packet_count = packet.packet_count
         self._last_mission_time = packet.mission_time
         self._last_received_at = packet.received_at
@@ -214,6 +227,8 @@ class VehicleStream:
         """Count a line that failed before it became a packet (§4.5)."""
         if rejected.reason is RejectReason.CHECKSUM:
             self.counters.checksum_failed += 1
+        elif rejected.reason is RejectReason.RF_ERROR:
+            self.counters.rf_errors += 1
         elif rejected.reason.is_malformed:
             self.counters.malformed += 1
 
@@ -323,6 +338,11 @@ class TelemetryDemux:
             self._parse_snr_line(text)
             return None
 
+        # Parse LoRa receiver error line (§4)
+        if text.upper().startswith("LORA RX ERROR"):
+            self._parse_lora_rx_error(text, received_at)
+            return None
+
         if not (text.startswith(PREFIX_TELEMETRY + ",") or text.startswith("PKT=")):
             self.ignored_lines += 1
             return None
@@ -344,6 +364,11 @@ class TelemetryDemux:
             self._latest_snr = float(num_str)
         except Exception:
             pass
+
+    def _parse_lora_rx_error(self, text: str, received_at: float) -> None:
+        for s in self.streams.values():
+            s.counters.rf_errors += 1
+        self.notices.append(f"LoRa RX Error: {text}")
 
     # ── internals ────────────────────────────────────────────────────────
 

@@ -39,7 +39,9 @@ from ..graphs.plot import TelemetryGraph
 from ..theme import ThemeManager, FS_HEADING, FS_CAPTION
 from ..timeline import StateTimeline
 from ..widgets.gauges import GaugeField
+from ..widgets.gauges import GaugeField
 from ..widgets.telemetry_panel import TelemetryPanel
+from ..widgets.telemetry_detail import TelemetryDetailWidget
 
 
 class VehiclePage(QWidget):
@@ -71,13 +73,28 @@ class VehiclePage(QWidget):
         # §12 — latest mission time received; drives the header timer label.
         self._latest_mission_time: Optional[float] = None
 
+        # Build backing gauge fields for compatibility
+        self._init_backing_gauges()
+
         self._build()
         self.panel.set_replay_target(self._draw_sample)
+
+    def _init_backing_gauges(self) -> None:
+        fields = [
+            ("altitude",        axspec.ALTITUDE,        2),
+            ("velocity",        self.velocity_spec,     2),
+            ("pressure",        axspec.PRESSURE,        1),
+            ("temperature",     axspec.TEMPERATURE,     2),
+            ("battery_voltage", axspec.BATTERY,         2),
+            ("rssi",            axspec.RSSI,            0),
+            ("accel_magnitude", axspec.ACCEL_MAGNITUDE, 2),
+        ]
+        for key, spec, dp in fields:
+            self.gauges[key] = GaugeField(spec, decimals=dp, analog=self._analog)
 
     # ── construction ─────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        c = ThemeManager.C()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(10)
@@ -93,7 +110,14 @@ class VehiclePage(QWidget):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(10)
 
-        body_layout.addWidget(self._gauge_grid())
+        # 1. Digital gauge cards (default opening view - Image 1 / Image 2)
+        self._gauge_grid_widget = self._gauge_grid()
+        body_layout.addWidget(self._gauge_grid_widget)
+
+        # 2. Telemetry Detail widget (analog mode view - Image 3 / Image 4)
+        self.telemetry_detail = TelemetryDetailWidget(self.vehicle_id)
+        self.telemetry_detail.setVisible(False)
+        body_layout.addWidget(self.telemetry_detail)
 
         self.panel = TelemetryPanel(self.vehicle_id.value)
         body_layout.addWidget(self.panel)
@@ -145,24 +169,12 @@ class VehiclePage(QWidget):
         return row
 
     def _gauge_grid(self) -> QWidget:
-        """§9.1 — every telemetry field from §4.1, units on every field."""
+        """§9.1 — digital gauge card grid."""
         w = QWidget()
         grid = QGridLayout(w)
         grid.setSpacing(8)
         grid.setContentsMargins(0, 0, 0, 0)
-
-        fields = [
-            ("altitude",        axspec.ALTITUDE,        2),
-            ("velocity",        self.velocity_spec,     2),
-            ("pressure",        axspec.PRESSURE,        1),
-            ("temperature",     axspec.TEMPERATURE,     2),
-            ("battery_voltage", axspec.BATTERY,         2),
-            ("rssi",            axspec.RSSI,            0),
-            ("accel_magnitude", axspec.ACCEL_MAGNITUDE, 2),
-        ]
-        for i, (key, spec, dp) in enumerate(fields):
-            g = GaugeField(spec, decimals=dp, analog=self._analog)
-            self.gauges[key] = g
+        for i, (key, g) in enumerate(self.gauges.items()):
             grid.addWidget(g, i // 3, i % 3)
         return w
 
@@ -264,6 +276,8 @@ class VehiclePage(QWidget):
 
     def _toggle_gauge_mode(self) -> None:
         self._analog = not self._analog
+        self._gauge_grid_widget.setVisible(not self._analog)
+        self.telemetry_detail.setVisible(self._analog)
         for g in self.gauges.values():
             g.set_analog(self._analog)
         self._mode_button.setText("Show digital gauges" if self._analog
@@ -314,6 +328,9 @@ class VehiclePage(QWidget):
         self.gauges["battery_voltage"].set_value(packet.battery_voltage)
         self.gauges["rssi"].set_value(packet.rssi)
 
+        # Update Telemetry Detail view (Images 2 & 4)
+        self.telemetry_detail.update_telemetry(packet, derived_velocity=v)
+
         # GNSS status display (≥ 6 satellites = minimum reached, < 6 = insufficient)
         sats = packet.gnss_satellites
         fix_valid = packet.gnss_fix == 1 if hasattr(packet, "gnss_fix") else (sats > 0)
@@ -343,13 +360,14 @@ class VehiclePage(QWidget):
             self.gauges["accel_magnitude"].set_value(accel_val)
 
         t = packet.mission_time
-        spin_val = packet.gyro_spin_rate if packet.gyro_spin_rate != 0.0 else packet.gyro_z
+        spin_val = packet.gyro_spin_rate if packet.gyro_spin_rate is not None else packet.gyro_z
         samples = [
             ("altitude",        "", t, packet.altitude),
             ("temperature",     "", t, packet.temperature),
             ("pressure",        "", t, packet.pressure),
-            ("orientation",     "", t, spin_val),
         ]
+        if spin_val is not None:
+            samples.append(("orientation", "", t, spin_val))
         if accel_val is not None:
             samples.append(("accel_magnitude", "", t, accel_val))
         if v_final is not None:

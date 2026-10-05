@@ -25,12 +25,13 @@ import argparse
 import shutil
 import sys
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QFileDialog
 
 from ground_station.app import GroundStationApp
 from ground_station.launcher import LaunchChoice, LaunchMode, LauncherDialog
 from ground_station.link import LinkSupervisor, SERIAL_AVAILABLE
 from ground_station.logs.raw_log import SessionLogs
+from ground_station.logs.post_flight import PostFlightSource
 from ground_station.simulator.source import SimulatedSource
 from ground_station.theme import ThemeManager
 
@@ -38,6 +39,16 @@ from ground_station.theme import ThemeManager
 def _choose(app: QApplication, args) -> LaunchChoice | None:
     if args.sim:
         return LaunchChoice(LaunchMode.SIMULATOR)
+    if args.sd is not None or args.post_flight is not None:
+        filepath = args.sd if args.sd is not None else args.post_flight
+        if not filepath:
+            filename, _ = QFileDialog.getOpenFileName(
+                None, "Open Onboard SD Card Telemetry Log", "", "CSV Files (*.csv);;All Files (*)"
+            )
+            if not filename:
+                return None
+            filepath = filename
+        return LaunchChoice(LaunchMode.POST_FLIGHT, filepath=filepath)
     if args.port:
         return LaunchChoice(LaunchMode.LIVE, stable_id=f"DEV:{args.port}",
                             device=args.port, baud=args.baud)
@@ -49,9 +60,13 @@ def _choose(app: QApplication, args) -> LaunchChoice | None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="PHOENIX dB.V1 Ground Station")
     ap.add_argument("--sim", action="store_true",
                     help="skip the mode screen and run the simulator")
+    ap.add_argument("--sd", nargs="?", const="", default=None,
+                    help="open an onboard SD-card recorded telemetry log (.csv)")
+    ap.add_argument("--post-flight", dest="post_flight", nargs="?", const="", default=None,
+                    help="open post-flight analysis mode (.csv)")
     ap.add_argument("--port", help="skip the mode screen and connect to a port")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--log-dir", default="logs",
@@ -67,31 +82,37 @@ def main() -> int:
         return 0
 
     simulator = choice.mode is LaunchMode.SIMULATOR
+    post_flight = choice.mode is LaunchMode.POST_FLIGHT
 
-    if not simulator and not SERIAL_AVAILABLE:
+    if not simulator and not post_flight and not SERIAL_AVAILABLE:
         QMessageBox.critical(
             None, "pyserial not installed",
             "Live mode needs pyserial.\n\nInstall it with:\n"
             "    pip install pyserial")
         return 1
 
-    # §2.5 — "Simulator Mode" is the app-side thing. The vehicle-side
-    # telecommand is "Flight Software Simulation" and never carries this
-    # label; ENTER_SIMULATION is disabled while this flag is set.
+    # Mode label for title and sidebar
+    if simulator:
+        mode_label = "SIMULATOR MODE"
+    elif post_flight:
+        mode_label = "POST-FLIGHT SD CARD"
+    else:
+        mode_label = "LIVE"
+
     window = GroundStationApp(
-        mode_label="SIMULATOR MODE" if simulator else "LIVE",
+        mode_label=mode_label,
         simulator_mode=simulator)
 
-    # §12 — logging starts before the source does, so the first line to
-    # arrive is already being recorded. §12.2 makes the log the flight
-    # record, and a record that starts a beat late is missing the moment
-    # a bad connection usually announces itself.
     logs = SessionLogs(args.log_dir)
     _check_disk_space(args.log_dir, window)
 
-    # §2.2 — both objects expose the same signals, so nothing below this
-    # line branches on which mode is running.
-    source = SimulatedSource() if simulator else LinkSupervisor()
+    if simulator:
+        source = SimulatedSource()
+    elif post_flight:
+        source = PostFlightSource(choice.filepath or "")
+    else:
+        source = LinkSupervisor()
+
     _attach_logging(source, logs)
     window.connect_supervisor(source)
 
@@ -99,6 +120,8 @@ def main() -> int:
         source.connect_to()
         source.fault_injected.connect(
             lambda kind, note: logs.raw.write_event(f"SIM:{kind}", note))
+    elif post_flight:
+        source.connect_to()
     else:
         source.connect_to(choice.stable_id, choice.baud, choice.device)
 
@@ -129,14 +152,24 @@ def _attach_logging(source, logs: SessionLogs) -> None:
         vehicle = None
         # Cheap attribution for the log only. A wrong guess costs one
         # mis-filed line and never touches a displayed value.
-        if ",ROCKET," in line:
+        if ",ROCKET," in line or line.startswith("PKT="):
             vehicle = VehicleID.ROCKET
         elif ",CANSAT," in line:
             vehicle = VehicleID.CANSAT
         logs.raw.write_line(line, received_at, vehicle)
 
+    def on_packet(packet, result) -> None:
+        logs.sd.log_packet(packet)
+
+    def on_rejected(rejected) -> None:
+        logs.raw.write_rejected(rejected)
+        logs.sd.log_rejected(rejected.raw, rejected.reason.value,
+                             rejected.vehicle_id, rejected.received_at)
+
     source.raw_line.connect(on_raw)
-    source.line_rejected.connect(logs.raw.write_rejected)
+    source.rocket_packet.connect(on_packet)
+    source.cansat_packet.connect(on_packet)
+    source.line_rejected.connect(on_rejected)
     source.notice.connect(lambda msg: logs.raw.write_event("NOTICE", msg))
     source.source_state_changed.connect(
         lambda st: logs.raw.write_event("SOURCE", st.value))
@@ -144,6 +177,7 @@ def _attach_logging(source, logs: SessionLogs) -> None:
         lambda st: logs.raw.write_event("RECEIVER", st.value))
     source.vehicle_state_changed.connect(
         lambda vid, st: logs.raw.write_event("VEHICLE", f"{vid.value} {st.value}"))
+
 
 
 def _check_disk_space(log_dir: str, window) -> None:

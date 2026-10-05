@@ -505,21 +505,26 @@ class TelemetryGraph(QWidget):
         The alternative — one PlotDataItem per fragment — would allocate a
         new item per gap and leak them over a lossy flight.
         """
-        if not self._outage.breaks:
+        if not self._outage.breaks or not xs:
             return xs, ys
-        out_x, out_y = [], []
-        breaks = [b for b in self._outage.breaks if xs[0] <= b[1] and b[0] <= xs[-1]]
+        breaks = sorted([b for b in self._outage.breaks if xs[0] <= b[1] and b[0] <= xs[-1]], key=lambda b: b[0])
         if not breaks:
             return xs, ys
+        out_x, out_y = [], []
         bi = 0
-        for i, (x, y) in enumerate(zip(xs, ys)):
-            while bi < len(breaks) and x > breaks[bi][1]:
-                bi += 1
-            if bi < len(breaks) and breaks[bi][0] < x < breaks[bi][1]:
-                if out_x and out_x[-1] == out_x[-1]:
-                    out_x.append(0.5 * (breaks[bi][0] + breaks[bi][1]))
+        for i in range(len(xs)):
+            x, y = xs[i], ys[i]
+            if i > 0:
+                prev_x = xs[i - 1]
+                while bi < len(breaks) and breaks[bi][1] <= prev_x:
+                    bi += 1
+                if bi < len(breaks) and (
+                    (breaks[bi][0] <= prev_x and breaks[bi][1] >= x) or
+                    (prev_x <= breaks[bi][0] and breaks[bi][1] <= x) or
+                    (breaks[bi][0] < x < breaks[bi][1])
+                ):
+                    out_x.append(0.5 * (prev_x + x))
                     out_y.append(float("nan"))
-                continue
             out_x.append(x)
             out_y.append(y)
         return out_x, out_y

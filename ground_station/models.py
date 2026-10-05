@@ -96,6 +96,25 @@ GROUND_STATES = frozenset({FlightState.BOOT, FlightState.PRE_LAUNCH})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  §9 — validation states
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ValidationStatus(Enum):
+    VALID = "VALID"
+    INVALID_FORMAT = "INVALID_FORMAT"
+    INVALID_FIELD_COUNT = "INVALID_FIELD_COUNT"
+    INVALID_NUMERIC_FIELD = "INVALID_NUMERIC_FIELD"
+    INVALID_STATE = "INVALID_STATE"
+    INVALID_VEHICLE = "INVALID_VEHICLE"
+    CHECKSUM_FAILED = "CHECKSUM_FAILED"
+    DUPLICATE = "DUPLICATE"
+    OUT_OF_ORDER = "OUT_OF_ORDER"
+    MISSING_PACKET_DETECTED = "MISSING_PACKET_DETECTED"
+    RF_ERROR = "RF_ERROR"
+    TIMEOUT = "TIMEOUT"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  §4.1 — the decoded record
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -107,49 +126,44 @@ class TelemetryPacket:
     Frozen because §13.5 requires no shared mutable state downstream of
     the demultiplexer. Two dashboards holding the same packet cannot
     perturb each other.
-
-    NOTE: there is no velocity field, by design. §1.3 and §6.4 make
-    velocity / descent rate a ground-derived, display-only quantity
-    computed by velocity.py. It is deliberately not stored on the packet
-    so that nothing downstream can mistake it for a vehicle measurement
-    or feed it to a command decision.
     """
     # 1–5 identity and timing
-    team_id: Any
-    vehicle_id: VehicleID
-    mission_time: float          # s, monotonic
-    packet_count: int            # per-vehicle, never reset (§4.1 field 4)
-    state: FlightState
+    team_id: Optional[Any] = None
+    vehicle_id: VehicleID = VehicleID.ROCKET
+    mission_time: float = 0.0    # s, monotonic
+    packet_count: int = 0        # per-vehicle, never reset (§4.1 field 4)
+    state: Optional[FlightState] = None
 
     # 6–9 barometric and power
-    altitude: float              # m AGL, zeroed at the pad
-    pressure: float              # Pa
-    temperature: float           # °C
-    battery_voltage: float       # V
+    altitude: float = 0.0        # m AGL, zeroed at the pad
+    pressure: float = 0.0        # Pa
+    temperature: float = 0.0     # °C
+    battery_voltage: Optional[float] = None  # V
 
     # 10–14 GNSS
-    gnss_time: str               # "hh:mm:ss.ss" UTC, kept as text
-    gnss_latitude: float         # signed decimal degrees
-    gnss_longitude: float
-    gnss_altitude: float         # m MSL — different datum from `altitude`
-    gnss_satellites: int
+    gnss_time: Optional[str] = None          # "hh:mm:ss.ss" UTC, kept as text
+    gnss_latitude: float = 0.0   # signed decimal degrees
+    gnss_longitude: float = 0.0
+    gnss_altitude: float = 0.0   # m MSL — different datum from `altitude`
+    gnss_satellites: int = 0
 
     # 15–20 IMU
-    accel_x: float = 0.0         # g (PENDING)
-    accel_y: float = 0.0
-    accel_z: float = 0.0
-    gyro_x: float = 0.0          # deg/s
-    gyro_y: float = 0.0
-    gyro_z: float = 0.0
-    gyro_spin_rate: float = 0.0
+    accel_x: Optional[float] = None
+    accel_y: Optional[float] = None
+    accel_z: Optional[float] = None
+    gyro_x: Optional[float] = None
+    gyro_y: Optional[float] = None
+    gyro_z: Optional[float] = None
+    gyro_spin_rate: Optional[float] = None
     accelerometer: Optional[float] = None
 
     # Live rocket telemetry fields
-    flight_state_code: int = 0
+    flight_state_code: Optional[int] = None
     velocity: Optional[float] = None
-    vehicle_code: int = 1
-    raw_accelerometer: Optional[str] = None  # PENDING
-    checksum: str = ""
+    vehicle_code: Optional[int] = None
+    raw_accelerometer: Optional[str] = None
+    checksum: Optional[str] = None
+    validation_status: ValidationStatus = ValidationStatus.VALID
 
     # ── metadata attached on the ground, not measured by the vehicle ──────
     #: Fields beyond 21, e.g. receiver-appended RSSI/SNR (§3.4, §4.7).
@@ -166,15 +180,15 @@ class TelemetryPacket:
 
     @property
     def flight_state(self) -> str:
-        return self.state.value
+        return self.state.value if self.state is not None else "N/A"
 
     @property
-    def voltage(self) -> float:
+    def voltage(self) -> Optional[float]:
         return self.battery_voltage
 
     @property
     def vehicle(self) -> str:
-        return self.vehicle_id.value
+        return self.vehicle_id.value if self.vehicle_id is not None else "ROCKET"
 
     @property
     def latitude(self) -> float:
@@ -187,6 +201,14 @@ class TelemetryPacket:
     @property
     def satellites(self) -> int:
         return self.gnss_satellites
+
+    @property
+    def accel_magnitude(self) -> Optional[float]:
+        if self.accelerometer is not None:
+            return self.accelerometer
+        if self.accel_x is not None and self.accel_y is not None and self.accel_z is not None:
+            return (self.accel_x**2 + self.accel_y**2 + self.accel_z**2)**0.5
+        return None
 
     @property
     def rssi(self) -> Optional[float]:
@@ -261,6 +283,9 @@ class RejectReason(Enum):
     CHECKSUM = "checksum mismatch"
     DUPLICATE = "packet count not advancing"
     TIME_REGRESSION = "mission time went backwards"
+    INVALID_FORMAT = "invalid packet format"
+    RF_ERROR = "rf error"
+    TIMEOUT = "timeout"
 
     @property
     def is_malformed(self) -> bool:

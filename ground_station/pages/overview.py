@@ -144,12 +144,13 @@ class OverviewPage(QWidget):
         accel_val = packet.accelerometer
         if accel_val is not None:
             g["acceleration"].add_point(t, accel_val, tier=tier, state=state)
-        elif packet.accel_x != 0.0 or packet.accel_y != 0.0 or packet.accel_z != 0.0:
+        elif packet.accel_x is not None and packet.accel_y is not None and packet.accel_z is not None:
             for axis, val in (("X", packet.accel_x), ("Y", packet.accel_y),
                               ("Z", packet.accel_z)):
                 g["acceleration"].add_point(t, val, trace=axis, tier=tier, state=state)
-        spin_rate = packet.gyro_spin_rate if packet.gyro_spin_rate != 0.0 else packet.gyro_z
-        g["orientation"].add_point(t, spin_rate, tier=tier, state=state)
+        spin_rate = packet.gyro_spin_rate if packet.gyro_spin_rate is not None else packet.gyro_z
+        if spin_rate is not None:
+            g["orientation"].add_point(t, spin_rate, tier=tier, state=state)
         if v_final is not None:
             g["velocity"].add_point(t, v_final, tier=tier, state=state)
 

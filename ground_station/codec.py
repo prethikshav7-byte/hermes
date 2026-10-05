@@ -349,18 +349,18 @@ def _decode_pkt_frame(line: str) -> DecodedFrame:
     accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
 
     values: Dict[str, Any] = {
-        "team_id": "PHOENIX dB.V1",
+        "team_id": None,              # N/A in current hardware packet
         "vehicle_id": VehicleID.ROCKET,
         "vehicle_code": 1,
-        "mission_time": float(pkt_count),
+        "mission_time": 0.0,          # Set to elapsed receive time by parser
         "packet_count": pkt_count,
-        "state": FlightState.BOOT,
-        "flight_state_code": 0,
+        "state": None,                # N/A in current hardware packet
+        "flight_state_code": None,
         "altitude": parsed["ALT"],
         "pressure": pressure_val,
         "temperature": parsed["T"],
-        "battery_voltage": 0.0,
-        "gnss_time": "",
+        "battery_voltage": None,      # N/A in current hardware packet
+        "gnss_time": None,            # N/A in current hardware packet
         "gnss_latitude": parsed["LAT"],
         "gnss_longitude": parsed["LON"],
         "gnss_altitude": parsed["GALT"],
@@ -368,14 +368,14 @@ def _decode_pkt_frame(line: str) -> DecodedFrame:
         "accel_x": ax,
         "accel_y": ay,
         "accel_z": az,
-        "accelerometer": accel_mag,
-        "gyro_x": 0.0,
-        "gyro_y": 0.0,
-        "gyro_z": 0.0,
-        "gyro_spin_rate": 0.0,
-        "velocity": None,
+        "accelerometer": accel_mag,   # Derived magnitude
+        "gyro_x": None,
+        "gyro_y": None,
+        "gyro_z": None,
+        "gyro_spin_rate": None,       # N/A in current hardware packet
+        "velocity": None,             # N/A in current hardware packet
         "raw_accelerometer": None,
-        "checksum": "",
+        "checksum": None,             # N/A in current hardware packet (CHECKSUM = NOT AVAILABLE)
     }
     extras = {
         "gnss_fix": str(int(parsed["FIX"])),

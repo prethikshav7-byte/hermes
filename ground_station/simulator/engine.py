@@ -18,6 +18,7 @@ both of those matter more than they look.
 """
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
@@ -147,6 +148,8 @@ class SimulatedFlight:
         self.packet_count += 1
 
         mm, ss = int((t % 3600) // 60), t % 60
+        accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
+        vel = self.velocity_at(t)
         return {
             "team_id": TEAM_ID, "vehicle_id": self.vehicle,
             "mission_time": t, "packet_count": self.packet_count,
@@ -158,6 +161,9 @@ class SimulatedFlight:
             "gnss_satellites": max(4, int(9 + n(0, 1.5))),
             "accel_x": ax, "accel_y": ay, "accel_z": az,
             "gyro_x": gx, "gyro_y": gy, "gyro_z": gz,
+            "accelerometer": accel_mag,
+            "gyro_spin_rate": gz,
+            "velocity": vel,
         }
 
 

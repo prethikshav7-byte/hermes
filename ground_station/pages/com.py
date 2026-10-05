@@ -84,7 +84,7 @@ class PacketRecord:
         self.pressure = packet.pressure
         self.temperature = packet.temperature
         self.voltage = packet.battery_voltage
-        self.gnss_time = packet.gnss_time if packet.gnss_time and packet.gnss_time.strip() else "NOT AVAILABLE"
+        self.gnss_time = packet.gnss_time if packet.gnss_time and packet.gnss_time.strip() and packet.gnss_time != "—" else "NOT AVAILABLE"
         self.gnss_lat = packet.gnss_latitude
         self.gnss_lon = packet.gnss_longitude
         self.gnss_alt = packet.gnss_altitude
@@ -98,12 +98,12 @@ class PacketRecord:
             except ValueError:
                 accel_val = None
         elif accel_val is None and (
-            packet.accel_x != 0.0 or packet.accel_y != 0.0 or packet.accel_z != 0.0
+            packet.accel_x is not None and packet.accel_y is not None and packet.accel_z is not None
         ):
             accel_val = math.sqrt(packet.accel_x ** 2 + packet.accel_y ** 2 + packet.accel_z ** 2)
         self.accel = accel_val
 
-        self.spin = packet.gyro_spin_rate if packet.gyro_spin_rate != 0.0 else packet.gyro_z
+        self.spin = packet.gyro_spin_rate if packet.gyro_spin_rate is not None else packet.gyro_z
         self.rssi = packet.rssi
         self.snr = packet.snr
         self.is_sim = getattr(packet, "is_simulation", False)
@@ -138,10 +138,13 @@ class PacketRecord:
             code = packet.state.ordinal if hasattr(packet.state, "ordinal") else getattr(packet, "flight_state_code", 0)
             self.flight_state_code = code
             self.flight_state_name = STATE_NAMES.get(code, packet.state.value)
-        else:
-            code = getattr(packet, "flight_state_code", 0)
+        elif packet.flight_state_code is not None:
+            code = packet.flight_state_code
             self.flight_state_code = code
             self.flight_state_name = STATE_NAMES.get(code, "UNKNOWN")
+        else:
+            self.flight_state_code = None
+            self.flight_state_name = "NOT AVAILABLE"
 
         # Vehicle (1 = ROCKET, 2 = CANSAT)
         if packet.vehicle_id is VehicleID.ROCKET:
@@ -157,15 +160,10 @@ class PacketRecord:
         # Checksum
         if packet.checksum:
             self.checksum = str(packet.checksum)
-        elif self.raw_line and "," in self.raw_line:
-            parts = [p.strip() for p in self.raw_line.split(",") if p.strip()]
-            if len(parts) >= 2:
-                last_tok = parts[-1].split("*")[-1].split("=")[-1].strip()
-                self.checksum = last_tok if (len(last_tok) == 2 or last_tok.isalnum()) else "NOT AVAILABLE"
-            else:
-                self.checksum = "NOT AVAILABLE"
+        elif "*" in raw_text:
+            self.checksum = raw_text.rsplit("*", 1)[-1].strip()
         else:
-            self.checksum = "NOT AVAILABLE"
+            self.checksum = "CHECKSUM = NOT AVAILABLE"
 
 
 # ── Packet List Model ─────────────────────────────────────────────────────────
@@ -283,12 +281,16 @@ class PacketCardDelegate(QStyledItemDelegate):
 
         vel_label = "DESCENT" if record.vehicle_code == 2 else "VEL"
         vel_str = f"{record.velocity:.1f}m/s" if record.velocity is not None else "—"
-        alt_str = f"{record.altitude:.1f}m"
-        p_str = f"{record.pressure:.0f}Pa"
-        t_val = f"{record.temperature:.1f}°C"
-        v_val = f"{record.voltage:.2f}V"
+        alt_str = f"{record.altitude:.1f}m" if record.altitude is not None else "—"
+        p_str = f"{record.pressure:.0f}Pa" if record.pressure is not None else "—"
+        t_val = f"{record.temperature:.1f}°C" if record.temperature is not None else "—"
+        v_val = f"{record.voltage:.2f}V" if record.voltage is not None else "—"
+        if record.gnss_lat is not None and record.gnss_lon is not None:
+            gnss_val = f"{record.gnss_lat:.4f}°,{record.gnss_lon:.4f}°"
+        else:
+            gnss_val = "—"
 
-        t_line = f"ALT {alt_str} │ {vel_label} {vel_str} │ P {p_str} │ T {t_val} │ {v_val} │ {record.gnss_lat:.4f}°,{record.gnss_lon:.4f}°"
+        t_line = f"ALT {alt_str} │ {vel_label} {vel_str} │ P {p_str} │ T {t_val} │ {v_val} │ {gnss_val}"
         painter.drawText(rect.x() + 6, rect.y() + 27, t_line)
 
         painter.restore()
@@ -482,35 +484,47 @@ class PacketInspector(QWidget):
         self.raw_box.setPlainText(raw)
 
         tag = " [SIMULATED]" if record.is_sim else ""
+        t_tag = f" AT T+{record.mission_time:.2f}s" if record.mission_time is not None else ""
         self.sub_info.setText(
-            f"{record.vehicle_name} PACKET #{record.packet_count:04d} "
-            f"AT T+{record.mission_time:.2f}s{tag}"
+            f"{record.vehicle_name} PACKET #{record.packet_count:04d}{t_tag}{tag}"
         )
 
         # 19 Reference Specification Fields in exact order:
-        accel_str = f"{record.accel:.2f} m/s²" if record.accel is not None else "NOT AVAILABLE"
-        vel_str = f"{record.velocity:.2f} m/s" if record.velocity is not None else "NOT AVAILABLE"
+        time_stamp_str = f"{record.mission_time:.2f} s" if record.mission_time is not None else "NOT AVAILABLE"
+        alt_str = f"{record.altitude:.2f} m" if record.altitude is not None else "NOT AVAILABLE"
+        p_str = f"{record.pressure:.1f} Pa" if record.pressure is not None else "NOT AVAILABLE"
+        t_str = f"{record.temperature:.2f} °C" if record.temperature is not None else "NOT AVAILABLE"
+        v_str = f"{record.voltage:.2f} V" if record.voltage is not None else "NOT AVAILABLE"
         gnss_time_str = record.gnss_time if record.gnss_time and record.gnss_time != "—" else "NOT AVAILABLE"
+        lat_str = f"{record.gnss_lat:.6f} deg" if record.gnss_lat is not None else "NOT AVAILABLE"
+        lon_str = f"{record.gnss_lon:.6f} deg" if record.gnss_lon is not None else "NOT AVAILABLE"
+        gnss_alt_str = f"{record.gnss_alt:.2f} m" if record.gnss_alt is not None else "NOT AVAILABLE"
+        gnss_sats_str = str(record.gnss_sats) if record.gnss_sats is not None else "NOT AVAILABLE"
+        accel_str = f"{record.accel:.2f} m/s²" if record.accel is not None else "NOT AVAILABLE"
+        spin_str = f"{record.spin:.2f} deg/s" if record.spin is not None else "NOT AVAILABLE"
+        state_str = f"{record.flight_state_code} — {record.flight_state_name}" if record.flight_state_code is not None else "NOT AVAILABLE"
+        vel_str = f"{record.velocity:.2f} m/s" if record.velocity is not None else "NOT AVAILABLE"
+        vehicle_str = f"{record.vehicle_code} — {record.vehicle_name}" if record.vehicle_code is not None else "NOT AVAILABLE"
 
         fields = [
             ("Prefix",                 record.prefix,                                record.prefix_desc),
             ("Team ID",                record.team_id,                               "Fixed format string"),
-            ("Time Stamp",             f"{record.mission_time:.2f} s",               "Time from boot (seconds)"),
+            ("Time Stamp",             time_stamp_str,                               "Time from boot (seconds)"),
             ("Packet Count",           str(record.packet_count),                     "Packets sent during telemetry"),
-            ("Altitude",               f"{record.altitude:.2f} m",                   "0.1 m resolution, corrected"),
-            ("Pressure",               f"{record.pressure:.1f} Pa",                  "1 Pa resolution"),
-            ("Temperature",            f"{record.temperature:.2f} °C",               "0.1 °C resolution"),
-            ("Voltage",                f"{record.voltage:.2f} V",                    "0.01 V resolution"),
+            ("Altitude",               alt_str,                                      "0.1 m resolution, corrected"),
+            ("Pressure",               p_str,                                        "1 Pa resolution"),
+            ("Temperature",            t_str,                                        "0.1 °C resolution"),
+            ("Voltage",                v_str,                                        "0.01 V resolution"),
             ("GNSS Time",              gnss_time_str,                                "seconds / UTC"),
-            ("GNSS Latitude",          f"{record.gnss_lat:.6f} deg",                 "0.0001 deg resolution"),
-            ("GNSS Longitude",         f"{record.gnss_lon:.6f} deg",                 "0.0001 deg resolution"),
-            ("GNSS Altitude",          f"{record.gnss_alt:.2f} m",                   "0.1 m resolution"),
-            ("GNSS Satellites",        str(record.gnss_sats),                        "Satellite count"),
+            ("GNSS Latitude",          lat_str,                                      "0.0001 deg resolution"),
+            ("GNSS Longitude",         lon_str,                                      "0.0001 deg resolution"),
+            ("GNSS Altitude",          gnss_alt_str,                                 "0.1 m resolution"),
+            ("GNSS Satellites",        gnss_sats_str,                                "Satellite count"),
             ("Accelerometer",          accel_str,                                    "m/s² corrected"),
-            ("Gyro Spin Rate",         f"{record.spin:.2f} deg/s",                   "deg/s spin rate"),
-            ("Flight Software State",  f"{record.flight_state_code} — {record.flight_state_name}", "0..7 flight state"),
+            ("Gyro Spin Rate",         spin_str,                                     "deg/s spin rate"),
+            ("Flight Software State",  state_str,                                    "0..7 flight state"),
             ("Velocity",               vel_str,                                      "m/s velocity"),
-            ("Vehicle",                f"{record.vehicle_code} — {record.vehicle_name}", "1-ROCKET, 2-CANSAT"),
+            ("Vehicle",                vehicle_str,                                  "1-ROCKET, 2-CANSAT"),
             ("Checksum",               record.checksum,                              "Fixed format checksum"),
         ]
 

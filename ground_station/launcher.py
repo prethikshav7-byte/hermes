@@ -31,7 +31,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QSettings, Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -42,17 +42,20 @@ from .theme import ThemeManager
 class LaunchMode(Enum):
     LIVE = "live"
     SIMULATOR = "simulator"
+    POST_FLIGHT = "post_flight"
 
 
 class LaunchChoice:
     """What the operator picked."""
 
     def __init__(self, mode: LaunchMode, stable_id: Optional[str] = None,
-                 device: Optional[str] = None, baud: int = 115200):
+                 device: Optional[str] = None, baud: int = 115200,
+                 filepath: Optional[str] = None):
         self.mode = mode
         self.stable_id = stable_id
         self.device = device
         self.baud = baud
+        self.filepath = filepath
 
 
 class LauncherDialog(QDialog):
@@ -163,6 +166,28 @@ class LauncherDialog(QDialog):
         run_sim.clicked.connect(self._choose_sim)
         lay.addWidget(run_sim)
 
+        lay.addWidget(self._divider())
+
+        # ── Post-Flight SD Card Mode ─────────────────────────────────────
+        sd_head = QLabel("Post-Flight SD Card Analysis")
+        sd_head.setFont(QFont("monospace", 11, QFont.Weight.Bold))
+        sd_head.setStyleSheet(f"color: {c.TEXT};")
+        lay.addWidget(sd_head)
+
+        sd_note = QLabel(
+            "Opens and analyzes a telemetry log physically recorded on the "
+            "rocket's SD card during flight. No live hardware, no simulation.")
+        sd_note.setFont(QFont("monospace", 8))
+        sd_note.setStyleSheet(f"color: {c.TEXT_DIM};")
+        sd_note.setWordWrap(True)
+        lay.addWidget(sd_note)
+
+        run_sd = QPushButton("Import SD Card Flight Log (.csv)...")
+        run_sd.setFont(QFont("monospace", 10, QFont.Weight.Bold))
+        run_sd.setStyleSheet(self._button_css(c.CYAN))
+        run_sd.clicked.connect(self._choose_sd)
+        lay.addWidget(run_sd)
+
         self._status = QLabel("")
         self._status.setFont(QFont("monospace", 8))
         self._status.setStyleSheet(f"color: {c.AMBER};")
@@ -200,7 +225,7 @@ class LauncherDialog(QDialog):
         self._ports = enumerate_ports()
         if not self._ports:
             self._port_box.addItem("No serial devices found")
-            self._run_live.setEnabled(False)
+            self._run_live.setEnabled(True)
             self._status.setText(
                 "No serial devices found. Connect the ground receiver and "
                 "select Refresh.")
@@ -223,6 +248,10 @@ class LauncherDialog(QDialog):
     def _choose_live(self) -> None:
         port: Optional[PortInfo] = self._port_box.currentData()
         if port is None:
+            self._settings.setValue("baud", self._baud.value())
+            self.choice = LaunchChoice(LaunchMode.LIVE, stable_id="",
+                                       device=None, baud=self._baud.value())
+            self.accept()
             return
         self._settings.setValue("stable_id", port.stable_id)
         self._settings.setValue("baud", self._baud.value())
@@ -233,3 +262,11 @@ class LauncherDialog(QDialog):
     def _choose_sim(self) -> None:
         self.choice = LaunchChoice(LaunchMode.SIMULATOR)
         self.accept()
+
+    def _choose_sd(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Open Onboard SD Card Telemetry Log", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if filename:
+            self.choice = LaunchChoice(LaunchMode.POST_FLIGHT, filepath=filename)
+            self.accept()

@@ -34,28 +34,47 @@ from PyQt6.QtWidgets import (
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from ..actuators import (
-    ACTUATORS, ARM_TIMEOUT_S, Actuator, ActuatorSpec, ArmingCentre,
-    CALIBRATIONS, CalibrationOutcome, CalibrationRun,
-)
-from ..commands import (
-    BENCH_COMMANDS, COMMANDS, CommandCentre, CommandRecord, CommandStatus, Guard,
-    ModeValue, VehicleModes, check_guard,
-)
-from ..models import (
-    FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
-)
-from ..theme import ThemeManager
+try:
+    from ..actuators import (
+        ACTUATORS, ARM_TIMEOUT_S, Actuator, ActuatorSpec, ArmingCentre,
+        CALIBRATIONS, CalibrationOutcome, CalibrationRun,
+    )
+    from ..commands import (
+        BENCH_COMMANDS, COMMANDS, CommandCentre, CommandRecord, CommandStatus, Guard,
+        ModeValue, VehicleModes, check_guard,
+    )
+    from ..models import (
+        FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
+    )
+    from ..theme import ThemeManager
+except (ImportError, ValueError):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    from ground_station.actuators import (
+        ACTUATORS, ARM_TIMEOUT_S, Actuator, ActuatorSpec, ArmingCentre,
+        CALIBRATIONS, CalibrationOutcome, CalibrationRun,
+    )
+    from ground_station.commands import (
+        BENCH_COMMANDS, COMMANDS, CommandCentre, CommandRecord, CommandStatus, Guard,
+        ModeValue, VehicleModes, check_guard,
+    )
+    from ground_station.models import (
+        FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
+    )
+    from ground_station.theme import ThemeManager
 
 
 def _btn_css(accent: str) -> str:
     c = ThemeManager.C()
+    dis_color = accent if accent == c.RED else "#8b949e"
+    dis_border = "#a82020" if accent == c.RED else "#2b3644"
     return (f"QPushButton {{ background-color: {c.BG_INPUT}; color: {accent}; "
             f"border: 1px solid {accent}; border-radius: 4px; "
-            f"padding: 6px 12px; }}"
+            f"padding: 6px 12px; font-weight: bold; }}"
             f"QPushButton:hover {{ background-color: {c.BG_CARD_HOVER}; }}"
-            f"QPushButton:disabled {{ color: {c.TEXT_MUTED}; "
-            f"border-color: {c.BORDER}; }}")
+            f"QPushButton:disabled {{ background-color: #121822; color: {dis_color}; "
+            f"border: 1px solid {dis_border}; font-weight: bold; }}")
 
 
 def _armed_btn_css() -> str:
@@ -306,7 +325,7 @@ class ActuatorPanel(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ModePanel(QWidget):
-    """Two orthogonal indicators, never merged into one 'status'."""
+    """Telemetry control panel matching user layout with 4 mode boxes."""
 
     command_requested = pyqtSignal(str)
 
@@ -317,70 +336,37 @@ class ModePanel(QWidget):
         self.setStyleSheet(
             f"background-color: {c.BG_CARD}; border: 1px solid {c.BORDER}; "
             f"border-radius: 6px;")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(8)
-        lay.addWidget(_heading("Sampling and Transmission"))
-
-        note = QLabel("These are independent. Sampling is what the vehicle "
-                      "measures; transmission is what it sends.")
-        note.setFont(QFont("monospace", 8))
-        note.setStyleSheet(f"color: {c.TEXT_DIM};")
-        note.setWordWrap(True)
-        lay.addWidget(note)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(12, 10, 12, 10)
+        self.layout.setSpacing(8)
+        self.layout.addWidget(_heading("Telemetry"))
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
 
-        grid.addWidget(self._cap("Sampling"), 0, 0)
-        self._sampling = self._val()
-        grid.addWidget(self._sampling, 0, 1)
-        for i, cmd in enumerate(("SET_MODE_LIVE", "SET_MODE_HIBERNATE")):
-            b = QPushButton(cmd.replace("SET_MODE_", "").title())
-            b.setFont(QFont("monospace", 8))
-            b.setStyleSheet(_btn_css(ThemeManager.C().TEXT))
+        # Row 0: [ Live ] [ Hibernate ]
+        for i, (cmd, label) in enumerate([("SET_MODE_LIVE", "Live"), ("SET_MODE_HIBERNATE", "Hibernate")]):
+            b = QPushButton(label)
+            b.setFont(QFont("monospace", 9, QFont.Weight.Bold))
+            b.setMinimumHeight(30)
+            b.setStyleSheet(_btn_css(c.TEXT))
             b.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
-            grid.addWidget(b, 0, 2 + i)
+            grid.addWidget(b, 0, i)
 
-        grid.addWidget(self._cap("Transmission"), 1, 0)
-        self._telemetry = self._val()
-        grid.addWidget(self._telemetry, 1, 1)
-        for i, cmd in enumerate(("ENABLE_TELEMETRY", "DISABLE_TELEMETRY")):
-            b = QPushButton(cmd.split("_")[0].title())
-            b.setFont(QFont("monospace", 8))
-            b.setStyleSheet(_btn_css(ThemeManager.C().TEXT))
+        # Row 1: [ Enable ] [ Disable ]
+        for i, (cmd, label) in enumerate([("ENABLE_TELEMETRY", "Enable"), ("DISABLE_TELEMETRY", "Disable")]):
+            b = QPushButton(label)
+            b.setFont(QFont("monospace", 9, QFont.Weight.Bold))
+            b.setMinimumHeight(30)
+            b.setStyleSheet(_btn_css(c.TEXT))
             b.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
-            grid.addWidget(b, 1, 2 + i)
+            grid.addWidget(b, 1, i)
 
-        lay.addLayout(grid)
-
-    def _cap(self, text: str) -> QLabel:
-        c = ThemeManager.C()
-        l = QLabel(text)
-        l.setFont(QFont("monospace", 8))
-        l.setStyleSheet(f"color: {c.TEXT_DIM};")
-        return l
-
-    def _val(self) -> QLabel:
-        c = ThemeManager.C()
-        l = QLabel("UNKNOWN")
-        l.setFont(QFont("monospace", 9, QFont.Weight.Bold))
-        l.setStyleSheet(f"color: {c.TEXT_MUTED};")
-        return l
+        self.layout.addLayout(grid)
 
     def refresh(self) -> None:
-        c = ThemeManager.C()
-        for label, value in ((self._sampling, self.modes.sampling),
-                             (self._telemetry, self.modes.telemetry)):
-            # §10.4 — the confirmed-active mode from the vehicle's
-            # acknowledgment, never the last-requested mode. PENDING and
-            # UNCONFIRMED are shown as themselves rather than optimistically
-            # resolved to the requested value.
-            colour = {
-                ModeValue.PENDING: c.AMBER,
-                ModeValue.UNCONFIRMED: c.RED,
-                ModeValue.UNKNOWN: c.TEXT_MUTED,
-            }.get(value, c.GREEN)
+        pass
 # ─────────────────────────────────────────────────────────────────────────────
 #  Sequence & Bench Controls
 # ─────────────────────────────────────────────────────────────────────────────
@@ -590,18 +576,11 @@ class CalibrationPanel(QWidget):
         lay.setSpacing(6)
         lay.addWidget(_heading("Calibration"))
 
-        note = QLabel("Runs on the vehicle. Available in BOOT and PRE-LAUNCH "
-                      "only — zeroing the barometer in flight corrupts the "
-                      "altitude datum for the rest of the mission.")
-        note.setFont(QFont("monospace", 8))
-        note.setStyleSheet(f"color: {c.TEXT_DIM};")
-        note.setWordWrap(True)
-        lay.addWidget(note)
-
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         self._buttons: List[QPushButton] = []
-        for i, sensor in enumerate(CALIBRATIONS):
+        active_calibrations = [s for s in CALIBRATIONS if s.key in ("ALTITUDE", "IMU")]
+        for i, sensor in enumerate(active_calibrations):
             name = QLabel(sensor.label)
             name.setFont(QFont("monospace", 9))
             name.setStyleSheet(f"color: {c.TEXT};")
@@ -775,6 +754,10 @@ class CommandPage(QWidget):
             "TEST5": "Manual sequence command sent",
             "NEXT": "Next sequence step command sent",
             "TEST6": "Full sequence command sent",
+            "FREQ:ROCKET:ORIGINAL": "Rocket frequency set to Original",
+            "FREQ:ROCKET:BACKUP": "Rocket frequency set to Backup",
+            "FREQ:CANSAT:ORIGINAL": "CanSat frequency set to Original",
+            "FREQ:CANSAT:BACKUP": "CanSat frequency set to Backup",
         }
         return names.get(command, f"{command} command sent")
 
@@ -839,22 +822,15 @@ class CommandPage(QWidget):
 
         lay.addLayout(self._vehicle_selector())
 
+        # Telemetry panel (containing 4 mode boxes, refresh processor, and frequency selectors)
         self.mode_panel = ModePanel(self.centre.modes[self.vehicle])
         self.mode_panel.command_requested.connect(self._send_mode_command)
+        self._setup_telemetry_commands(self.mode_panel)
         lay.addWidget(self.mode_panel)
-
-        lay.addWidget(self._general_commands())
 
         act_head = _heading("Actuators")
         lay.addWidget(act_head)
-        self._actuator_note = QLabel(
-            "Actuators are on the Rocket. All three share one PCA9685 on one "
-            "I²C bus; commanding one does not delay status polling of the "
-            "others.")
-        self._actuator_note.setFont(QFont("monospace", 8))
-        self._actuator_note.setStyleSheet(f"color: {c.TEXT_DIM};")
-        self._actuator_note.setWordWrap(True)
-        lay.addWidget(self._actuator_note)
+        # Actuators note removed per spec
 
         self.actuator_panels: Dict[str, ActuatorPanel] = {}
         for spec in ACTUATORS:
@@ -937,30 +913,119 @@ class CommandPage(QWidget):
         else:
             self.arm_rocket()
 
-    def _general_commands(self) -> QWidget:
+    def _setup_telemetry_commands(self, panel: ModePanel) -> None:
         c = ThemeManager.C()
-        w = _card()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(8)
-        lay.addWidget(_heading("Commands"))
 
-        grid = QGridLayout()
+        # ── Frequency selector rows: Rocket & CanSat ─────────────────────────
+        freq_grid = QGridLayout()
+        freq_grid.setHorizontalSpacing(8)
+        freq_grid.setVerticalSpacing(8)
+
+        # Row 0: Rocket frequency [ Rocket ] [ Original ] [ Backup ]
+        rkt_capsule = self._label_capsule("Rocket")
+        freq_grid.addWidget(rkt_capsule, 0, 0)
+
+        self._rocket_freq_buttons: Dict[str, QPushButton] = {}
+        for i, (mode, label, freq_str) in enumerate([
+            ("ORIGINAL", "Original", "433.05 MHz"),
+            ("BACKUP", "Backup", "434.79 MHz"),
+        ]):
+            btn = QPushButton(label)
+            btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
+            btn.setMinimumHeight(30)
+            btn.setCheckable(True)
+            btn.setToolTip(f"Rocket telemetry frequency: {label} ({freq_str})")
+            btn.clicked.connect(lambda _c, m=mode: self._set_frequency(VehicleID.ROCKET, m))
+            self._rocket_freq_buttons[mode] = btn
+            freq_grid.addWidget(btn, 0, 1 + i)
+
+        # Row 1: CanSat frequency [ CanSat ] [ Original ] [ Backup ]
+        cansat_capsule = self._label_capsule("CanSat")
+        freq_grid.addWidget(cansat_capsule, 1, 0)
+
+        self._cansat_freq_buttons: Dict[str, QPushButton] = {}
+        for i, (mode, label, freq_str) in enumerate([
+            ("ORIGINAL", "Original", "433.25 MHz"),
+            ("BACKUP", "Backup", "434.55 MHz"),
+        ]):
+            btn = QPushButton(label)
+            btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
+            btn.setMinimumHeight(30)
+            btn.setCheckable(True)
+            btn.setToolTip(f"CanSat telemetry frequency: {label} ({freq_str})")
+            btn.clicked.connect(lambda _c, m=mode: self._set_frequency(VehicleID.CANSAT, m))
+            self._cansat_freq_buttons[mode] = btn
+            freq_grid.addWidget(btn, 1, 1 + i)
+
+        panel.layout.addLayout(freq_grid)
+
+        # ── Refresh Processor button (below frequency selectors) ────────────
         self._command_buttons: Dict[str, QPushButton] = {}
-        names = ["REQUEST_STATUS", "ENTER_SIMULATION", "REFRESH_PROCESSOR",
-                 "MANUAL_DEPLOY"]
-        for i, name in enumerate(names):
-            spec = COMMANDS[name]
-            b = QPushButton(name.replace("_", " ").title())
-            b.setFont(QFont("monospace", 9))
-            accent = c.RED if spec.destructive else c.TEXT
-            b.setStyleSheet(_btn_css(accent))
-            b.setToolTip(f"{spec.description}  ({spec.guard.value})")
-            b.clicked.connect(lambda _c, n=name: self._send_guarded(n))
-            self._command_buttons[name] = b
-            grid.addWidget(b, i // 2, i % 2)
-        lay.addLayout(grid)
-        return w
+        spec = COMMANDS["REFRESH_PROCESSOR"]
+        b_ref = QPushButton("Refresh Processor")
+        b_ref.setFont(QFont("monospace", 9, QFont.Weight.Bold))
+        b_ref.setMinimumHeight(32)
+        b_ref.setStyleSheet(_btn_css(c.TEXT))
+        b_ref.setToolTip(f"{spec.description}  ({spec.guard.value})")
+        b_ref.clicked.connect(lambda _c: self._send_guarded("REFRESH_PROCESSOR"))
+        self._command_buttons["REFRESH_PROCESSOR"] = b_ref
+        panel.layout.addWidget(b_ref)
+
+        self._rocket_freq = "ORIGINAL"
+        self._cansat_freq = "ORIGINAL"
+        self._update_freq_styles()
+
+    def _label_capsule(self, text: str) -> QFrame:
+        c = ThemeManager.C()
+        frame = QFrame()
+        frame.setStyleSheet(
+            f"QFrame {{ background-color: {c.BG_INPUT}; border: 1px solid {c.BORDER}; border-radius: 4px; }}"
+        )
+        frame.setMinimumHeight(30)
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(12, 4, 12, 4)
+        lbl = QLabel(text)
+        lbl.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        lbl.setStyleSheet(f"color: {c.TEXT_DIM}; border: none;")
+        lay.addWidget(lbl)
+        return frame
+
+    def _freq_btn_css(self, checked: bool) -> str:
+        c = ThemeManager.C()
+        if checked:
+            return (f"QPushButton {{ background-color: #122840; color: {c.CYAN}; "
+                    f"border: 1px solid {c.CYAN}; border-radius: 4px; "
+                    f"padding: 6px 12px; font-weight: bold; }}"
+                    f"QPushButton:hover {{ background-color: #1a385c; }}")
+        else:
+            return (f"QPushButton {{ background-color: {c.BG_INPUT}; color: {c.TEXT_DIM}; "
+                    f"border: 1px solid {c.BORDER}; border-radius: 4px; "
+                    f"padding: 6px 12px; font-weight: bold; }}"
+                    f"QPushButton:hover {{ background-color: {c.BG_CARD_HOVER}; color: {c.TEXT}; border-color: {c.TEXT_DIM}; }}")
+
+    def _update_freq_styles(self) -> None:
+        for mode, btn in getattr(self, "_rocket_freq_buttons", {}).items():
+            is_active = (mode == getattr(self, "_rocket_freq", "ORIGINAL"))
+            btn.setChecked(is_active)
+            btn.setStyleSheet(self._freq_btn_css(is_active))
+
+        for mode, btn in getattr(self, "_cansat_freq_buttons", {}).items():
+            is_active = (mode == getattr(self, "_cansat_freq", "ORIGINAL"))
+            btn.setChecked(is_active)
+            btn.setStyleSheet(self._freq_btn_css(is_active))
+
+    def _set_frequency(self, vid: VehicleID, mode: str) -> None:
+        if vid == VehicleID.ROCKET:
+            self._rocket_freq = mode
+            cmd = f"FREQ:ROCKET:{mode}"
+            self.centre.send(VehicleID.ROCKET, cmd)
+            self.notice.emit(f"Rocket frequency set to {mode.title()}")
+        else:
+            self._cansat_freq = mode
+            cmd = f"FREQ:CANSAT:{mode}"
+            self.centre.send(VehicleID.CANSAT, cmd)
+            self.notice.emit(f"CanSat frequency set to {mode.title()}")
+        self._update_freq_styles()
 
     def _on_actuator_angle(self, actuator_id: str, angle: int) -> None:
         cmd_prefix = {
@@ -1194,3 +1259,16 @@ class CommandPage(QWidget):
         # §10.7 — surface unacknowledged commands that have aged out
         # without ever auto-retrying them.
         self.centre.poll_timeouts()
+
+
+if __name__ == "__main__":
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication(sys.argv)
+    app.setStyleSheet(ThemeManager.main_stylesheet())
+    centre = CommandCentre(lambda vid, cmd: print(f"Transmitted to {vid.value}: {cmd}"))
+    page = CommandPage(centre)
+    page.resize(1100, 750)
+    page.show()
+    sys.exit(app.exec())
+

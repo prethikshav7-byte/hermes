@@ -334,6 +334,9 @@ class DerivedLog:
 #  Convenience bundle
 # ─────────────────────────────────────────────────────────────────────────────
 
+from .sd_log import SDTelemetryLogger
+
+
 class SessionLogs:
     """All log files for one session, sharing one directory and timestamp."""
 
@@ -341,6 +344,7 @@ class SessionLogs:
         self.session = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.raw = RawLogSet(directory, self.session)
         self.commands = CommandLog(directory, self.session)
+        self.sd = SDTelemetryLogger(directory, self.session)
         self.derived: Optional[DerivedLog] = (
             DerivedLog(directory, self.session) if keep_derived else None)
         self.directory = self.raw.directory
@@ -354,5 +358,7 @@ class SessionLogs:
     def close(self) -> None:
         self.raw.close()
         self.commands.close()
+        self.sd.close()
         if self.derived is not None:
             self.derived.close()
+

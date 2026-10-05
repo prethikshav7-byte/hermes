@@ -29,9 +29,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .models import (
-    FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
-)
+try:
+    from .models import (
+        FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
+    )
+except (ImportError, ValueError):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from ground_station.models import (
+        FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,6 +91,8 @@ COMMANDS: Dict[str, CommandSpec] = {
                     Guard.RECOVERY_USB_ONLY),
         CommandSpec("ABORT_TRANSFER", "Abort the current transfer",
                     Guard.RECOVERY_USB_ONLY),
+        CommandSpec("REFRESH_PROCESSOR", "Reinitialise the processing loop",
+                    Guard.TWO_STEP),
         # §10.2 — calibration commands.  GROUND_ONLY because zeroing the
         # barometer mid-flight corrupts the altitude datum for the rest of
         # the mission.  Each sensor is a separate command so the operator
@@ -144,6 +154,11 @@ COMMANDS: Dict[str, CommandSpec] = {
         CommandSpec("SEPARATION:90", "Set Separation angle to 90°", Guard.NONE, rocket_only=True),
         CommandSpec("LOCK:SEPARATION", "Lock Separation (0° safe position)", Guard.NONE, rocket_only=True),
         CommandSpec("LOCK:ALL", "Lock all servos to safe position (0°)", Guard.NONE, rocket_only=True),
+        # RF Frequency selection commands
+        CommandSpec("FREQ:ROCKET:ORIGINAL", "Set Rocket frequency to Original (433.05 MHz)", Guard.NONE),
+        CommandSpec("FREQ:ROCKET:BACKUP", "Set Rocket frequency to Backup (434.79 MHz)", Guard.NONE),
+        CommandSpec("FREQ:CANSAT:ORIGINAL", "Set CanSat frequency to Original (433.25 MHz)", Guard.NONE),
+        CommandSpec("FREQ:CANSAT:BACKUP", "Set CanSat frequency to Backup (434.55 MHz)", Guard.NONE),
     ]
 }
 
@@ -486,3 +501,11 @@ class VehicleModes:
         """
         return (self.sampling is ModeValue.HIBERNATE
                 and self.telemetry is ModeValue.ENABLED)
+
+
+if __name__ == "__main__":
+    print(f"ground_station.commands loaded successfully.")
+    print(f"Total registered commands: {len(COMMANDS)}")
+    for key, val in COMMANDS.items():
+        print(f"  {key:25s} -> {val.description}")
+
