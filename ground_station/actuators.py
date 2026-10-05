@@ -343,7 +343,7 @@ CALIBRATIONS: Tuple[SensorCalibration, ...] = (
                       "noise-filtered"),
     SensorCalibration("ALTITUDE", "Altitude",
                       "Zero at ground level — AGL, not MSL"),
-    SensorCalibration("IMU", "IMU / gyro", "All axes zeroed"),
+    SensorCalibration("IMU", "IMU", "All axes zeroed"),
     SensorCalibration("GNSS", "GNSS", "Reference fix captured at the pad"),
     SensorCalibration("TEMPERATURE", "Temperature",
                       "Ambient atmospheric temperature"),

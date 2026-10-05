@@ -102,7 +102,7 @@ COMMANDS: Dict[str, CommandSpec] = {
                     "Zero altimeter AGL datum at ground level",
                     Guard.GROUND_ONLY),
         CommandSpec("CALIBRATE_IMU",
-                    "Zero all IMU / gyro axes",
+                    "Zero all IMU axes",
                     Guard.GROUND_ONLY),
         CommandSpec("CALIBRATE_GNSS",
                     "Capture GNSS reference fix at the pad",
