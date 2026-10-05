@@ -758,6 +758,7 @@ class CommandPage(QWidget):
             "FREQ:ROCKET:BACKUP": "Rocket frequency set to Backup",
             "FREQ:CANSAT:ORIGINAL": "CanSat frequency set to Original",
             "FREQ:CANSAT:BACKUP": "CanSat frequency set to Backup",
+            "REFRESH_PROCESSOR": "Refresh processor command sent",
         }
         return names.get(command, f"{command} command sent")
 
@@ -966,8 +967,8 @@ class CommandPage(QWidget):
         b_ref.setFont(QFont("monospace", 9, QFont.Weight.Bold))
         b_ref.setMinimumHeight(32)
         b_ref.setStyleSheet(_btn_css(c.TEXT))
-        b_ref.setToolTip(f"{spec.description}  ({spec.guard.value})")
-        b_ref.clicked.connect(lambda _c: self._send_guarded("REFRESH_PROCESSOR"))
+        b_ref.setToolTip(f"{spec.description}")
+        b_ref.clicked.connect(self._on_refresh_processor_clicked)
         self._command_buttons["REFRESH_PROCESSOR"] = b_ref
         panel.layout.addWidget(b_ref)
 
@@ -1026,6 +1027,11 @@ class CommandPage(QWidget):
             self.centre.send(VehicleID.CANSAT, cmd)
             self.notice.emit(f"CanSat frequency set to {mode.title()}")
         self._update_freq_styles()
+
+    def _on_refresh_processor_clicked(self) -> None:
+        self.centre.send(self.vehicle, "REFRESH_PROCESSOR")
+        self.notice.emit("Refresh processor command sent")
+        self.refresh()
 
     def _on_actuator_angle(self, actuator_id: str, angle: int) -> None:
         cmd_prefix = {
@@ -1206,10 +1212,14 @@ class CommandPage(QWidget):
         link = self._links[self.vehicle]
 
         for name, button in self._command_buttons.items():
-            result = check_guard(COMMANDS[name], state, link,
-                                 self.simulator_mode, self._usb_direct)
-            button.setEnabled(result.allowed)
-            button.setToolTip(result.reason or COMMANDS[name].description)
+            if name == "REFRESH_PROCESSOR":
+                button.setEnabled(True)
+                button.setToolTip(COMMANDS[name].description)
+            else:
+                result = check_guard(COMMANDS[name], state, link,
+                                     self.simulator_mode, self._usb_direct)
+                button.setEnabled(result.allowed)
+                button.setToolTip(result.reason or COMMANDS[name].description)
 
         # §10.2 — blocked outside BOOT and PRE_LAUNCH.
         on_ground = state in GROUND_STATES if state is not None else True

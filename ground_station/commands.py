@@ -82,7 +82,7 @@ COMMANDS: Dict[str, CommandSpec] = {
                     Guard.NOT_IN_SIMULATOR_MODE),
         CommandSpec("REQUEST_STATUS", "System health report"),
         CommandSpec("REFRESH_PROCESSOR", "Reinitialise the processing loop",
-                    Guard.TWO_STEP),
+                    Guard.NONE),
         CommandSpec("MANUAL_DEPLOY", "Emergency manual deployment",
                     Guard.DESTRUCTIVE, rocket_only=True, destructive=True),
         CommandSpec("LIST_FILES", "List experiment files",
@@ -91,8 +91,6 @@ COMMANDS: Dict[str, CommandSpec] = {
                     Guard.RECOVERY_USB_ONLY),
         CommandSpec("ABORT_TRANSFER", "Abort the current transfer",
                     Guard.RECOVERY_USB_ONLY),
-        CommandSpec("REFRESH_PROCESSOR", "Reinitialise the processing loop",
-                    Guard.TWO_STEP),
         # §10.2 — calibration commands.  GROUND_ONLY because zeroing the
         # barometer mid-flight corrupts the altitude datum for the rest of
         # the mission.  Each sensor is a separate command so the operator
