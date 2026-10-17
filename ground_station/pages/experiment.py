@@ -43,6 +43,7 @@ from ..experiment.transfer import (
 )
 from ..models import FlightState
 from ..theme import ThemeManager
+from ..widgets.scroll_area import GroundStationScrollArea
 
 
 def _btn_css(accent: str) -> str:
@@ -298,8 +299,7 @@ class ExperimentPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        scroll = GroundStationScrollArea()
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(12, 12, 12, 12)
@@ -339,10 +339,14 @@ class ExperimentPage(QWidget):
         left_lay.addWidget(secondaries)
 
         split.addWidget(left)
-        split.addWidget(self._report_panel())
+        report_widget = self._report_panel()
+        split.addWidget(report_widget)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 1)
         lay.addWidget(split, stretch=1)
+
+        if hasattr(self, "_report_scroll"):
+            scroll.attach_child_wheel_passthrough(self._report_scroll)
 
         scroll.setWidget(body)
         outer.addWidget(scroll)
@@ -442,15 +446,15 @@ class ExperimentPage(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.addWidget(_heading("Parse Report"))
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        self._report_scroll = QScrollArea()
+        self._report_scroll.setWidgetResizable(True)
         self._report = QLabel("No file loaded.")
         self._report.setFont(QFont("monospace", 8))
         self._report.setStyleSheet(f"color: {c.TEXT_DIM};")
         self._report.setWordWrap(True)
         self._report.setAlignment(Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(self._report)
-        lay.addWidget(scroll)
+        self._report_scroll.setWidget(self._report)
+        lay.addWidget(self._report_scroll)
         return w
 
     # ── loading ──────────────────────────────────────────────────────────

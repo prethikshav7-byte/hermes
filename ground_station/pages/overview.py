@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QGridLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget,
+    QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from .. import axes as axspec
@@ -32,6 +32,7 @@ from ..parser import IngestResult, LossTier
 from ..graphs.plot import TelemetryGraph
 from ..theme import ThemeManager
 from ..widgets.health_strip import HealthStrip
+from ..widgets.scroll_area import GroundStationScrollArea
 
 
 class OverviewPage(QWidget):
@@ -56,8 +57,7 @@ class OverviewPage(QWidget):
         self.health = HealthStrip()
         outer.addWidget(self.health)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        scroll = GroundStationScrollArea()
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(10, 10, 10, 10)

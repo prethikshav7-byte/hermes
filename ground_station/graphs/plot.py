@@ -49,36 +49,56 @@ from ..parser import LossTier
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TelemetryViewBox(pg.ViewBox):
-    """A ViewBox that zooms on trackpad pinch and on nothing else.
+    """A ViewBox that handles direct click-and-drag panning and pinch gestures.
 
-    pyqtgraph's default is wheel-to-zoom, which §7.2 forbids outright
-    ("scroll wheel / trackpad scroll must never zoom a graph, selected or
-    not"). Disabling mouse interaction wholesale would also kill the
-    pinch path, so the events are intercepted individually.
+    Wheel events are passed through so vertical dashboard scrolling stays smooth.
     """
 
     pinched = pyqtSignal(float, float)      # scale factor, centre x
+    sig_panned = pyqtSignal(float, float)   # delta_x, delta_y in data coordinates
+    sig_clicked = pyqtSignal()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.selected = False
-        # §7.2 — zoom affects the x-axis only; y autoscales within §8.
         self.setMouseEnabled(x=False, y=False)
         self.setMenuEnabled(False)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._dragging = False
 
     def wheelEvent(self, ev, axis=None):
-        # §7.2, verbatim: scroll must never zoom, selected or not. Accept
-        # the event so it does not bubble up to a parent scroll area and
-        # move the page under the operator's cursor either.
-        ev.accept()
+        # §7.2: Wheel never zooms/pans graph. Ignore so it bubbles to parent QScrollArea.
+        ev.ignore()
 
     def mouseDragEvent(self, ev, axis=None):
-        # Panning breaks follow mode (§7.3) and is only available while
-        # selected, matching the pinch rule.
-        if not self.selected:
-            ev.ignore()
-            return
-        super().mouseDragEvent(ev, axis=axis)
+        ev.accept()
+        if ev.button() == Qt.MouseButton.LeftButton:
+            if ev.isStart():
+                self._dragging = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+            p1 = self.mapToView(ev.lastPos())
+            p2 = self.mapToView(ev.pos())
+            delta_x = -(p2.x() - p1.x())
+            delta_y = -(p2.y() - p1.y())
+            self.sig_panned.emit(delta_x, delta_y)
+
+            if ev.isFinish():
+                self._dragging = False
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mouseClickEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            ev.accept()
+            self.sig_clicked.emit()
+
+
+class TelemetryPlotWidget(pg.PlotWidget):
+    """PlotWidget that allows wheel events to bubble to parent scroll container."""
+
+    def wheelEvent(self, ev):
+        ev.ignore()
+
 
 
 
@@ -183,7 +203,13 @@ class TelemetryGraph(QWidget):
 
         self._selected = False
         self._follow = True                  # §7.3
-        self._x_span = self.zoom_spec.max_zoom_span_s
+        self._manual_y = False
+        self._view_x_min = 0.0
+        self._view_x_max = self.zoom_spec.max_zoom_span_s
+        self._x_span = self._view_x_max - self._view_x_min
+        default_y_lo, default_y_hi = axspec.clamp_range(self.spec, None, None)
+        self._view_y_min = default_y_lo
+        self._view_y_max = default_y_hi
         self._latest_x = 0.0
         self._dirty = False
         self._state_now: Optional[FlightState] = None
@@ -205,8 +231,10 @@ class TelemetryGraph(QWidget):
         layout.setContentsMargins(pad, pad, pad, pad)
 
         self.vb = TelemetryViewBox()
-        self.plot = pg.PlotWidget(viewBox=self.vb, background=c.BG_CARD)
-        self.plot.setAntialiasing(True)
+        self.vb.sig_panned.connect(self.pan_by)
+        self.vb.sig_clicked.connect(self._on_vb_clicked)
+        self.plot = TelemetryPlotWidget(viewBox=self.vb, background=c.BG_CARD)
+        self.plot.setAntialiasing(False)
 
         # §7.4 — axis titles outside the plot area, no legend anywhere.
         # Fixed label space reserved on both axes so the titles can never
@@ -325,45 +353,144 @@ class TelemetryGraph(QWidget):
         if ev.type() == ev.Type.NativeGesture:
             if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
                 if self._selected:
-                    self._apply_zoom(1.0 - ev.value())
+                    val = ev.value()
+                    factor = 1.0 - val
+                    if factor > 0:
+                        self._apply_zoom(factor)
+                        self._redraw()
                 ev.accept()
                 return True
         return super().event(ev)
 
     def _apply_zoom(self, factor: float) -> None:
-        """Zoom the time window, bounded per §7.2.
+        """Apply a multiplicative zoom factor around the center of the visible viewport.
 
-        Bounded means it *stops* at the bound — no error, no extrapolation,
-        no inversion. Clamping the span before applying it is what
-        guarantees that; an unclamped multiply could pass through zero and
-        invert the axis.
+        factor < 1.0 zooms in (reduces span).
+        factor > 1.0 zooms out (expands span).
+        Clamps to [0, max(latest_x, max_zoom_span_s)] with a safe min-span floor of 0.05s.
         """
+        data_min = 0.0
+        data_max = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
+        max_possible_span = max(0.05, data_max - data_min)
+
         if self._follow:
-            self._x_span = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
-        min_span = self.zoom_spec.max_zoom_span_s      # tightest view
-        max_span = max(self._latest_x, min_span)       # §7.3 full mission
-        new_span = self._x_span * max(0.1, factor)
-        self._x_span = max(min_span, min(max_span, new_span))
-        self._follow = False                           # §7.3 manual breaks follow
+            cur_min = data_min
+            cur_max = data_max
+        else:
+            cur_min = self._view_x_min
+            cur_max = self._view_x_max
+            if cur_max <= cur_min or not (cur_min == cur_min and cur_max == cur_max):
+                cur_min, cur_max = data_min, data_max
+
+        cur_span = max(0.001, cur_max - cur_min)
+        center = 0.5 * (cur_min + cur_max)
+
+        MIN_SPAN_FLOOR = 0.05  # 50ms floor prevents numerical collapse
+        safe_factor = max(0.01, min(100.0, factor))
+        new_span = cur_span * safe_factor
+        new_span = max(MIN_SPAN_FLOOR, min(max_possible_span, new_span))
+
+        if new_span >= max_possible_span:
+            new_min = data_min
+            new_max = data_max
+        else:
+            new_min = center - 0.5 * new_span
+            new_max = center + 0.5 * new_span
+            if new_min < data_min:
+                new_min = data_min
+                new_max = min(data_max, data_min + new_span)
+            elif new_max > data_max:
+                new_max = data_max
+                new_min = max(data_min, data_max - new_span)
+
+        if new_max - new_min < MIN_SPAN_FLOOR and max_possible_span >= MIN_SPAN_FLOOR:
+            if new_min <= data_min:
+                new_min = data_min
+                new_max = data_min + MIN_SPAN_FLOOR
+            elif new_max >= data_max:
+                new_max = data_max
+                new_min = data_max - MIN_SPAN_FLOOR
+
+        self._view_x_min = new_min
+        self._view_x_max = new_max
+        self._x_span = max(MIN_SPAN_FLOOR if max_possible_span >= MIN_SPAN_FLOOR else 0.001, new_max - new_min)
+        self._follow = False
         self._dirty = True
 
+    def _on_vb_clicked(self) -> None:
+        self.set_selected(not self._selected)
+
+    def pan_by(self, delta_x: float, delta_y: float) -> None:
+        """Pan the viewport by delta_x and delta_y in data units with boundary clamping."""
+        data_min = 0.0
+        data_max = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
+
+        # ── X-axis Pan ───────────────────────────────────────────────────
+        x_span = max(0.05, self._view_x_max - self._view_x_min)
+        max_possible_x_span = max(0.05, data_max - data_min)
+
+        if abs(delta_x) > 1e-9:
+            new_x_min = self._view_x_min + delta_x
+            new_x_max = new_x_min + x_span
+            if new_x_min < data_min:
+                new_x_min = data_min
+                new_x_max = min(data_max, data_min + x_span)
+            elif new_x_max > data_max:
+                new_x_max = data_max
+                new_x_min = max(data_min, data_max - x_span)
+
+            self._view_x_min = new_x_min
+            self._view_x_max = new_x_max
+            self._x_span = new_x_max - new_x_min
+            self._follow = False
+
+        # ── Y-axis Pan ───────────────────────────────────────────────────
+        if abs(delta_y) > 1e-9:
+            y_span = max(0.001, self._view_y_max - self._view_y_min)
+            extent_lo = self.spec.extent_lo if axspec._finite(self.spec.extent_lo) else -1e6
+            extent_hi = self.spec.extent_hi if axspec._finite(self.spec.extent_hi) else 1e6
+            if self.spec.hard_floor:
+                extent_lo = max(0.0, extent_lo)
+
+            new_y_min = self._view_y_min + delta_y
+            new_y_max = new_y_min + y_span
+
+            # Clamp to extent boundaries if defined
+            if new_y_min < extent_lo:
+                new_y_min = extent_lo
+                new_y_max = min(extent_hi, extent_lo + y_span)
+            elif new_y_max > extent_hi:
+                new_y_max = extent_hi
+                new_y_min = max(extent_lo, extent_hi - y_span)
+
+            self._view_y_min = new_y_min
+            self._view_y_max = new_y_max
+            self._manual_y = True
+
+        self._dirty = True
+        self._redraw()
+
     def zoom_in(self, factor: Optional[float] = None) -> None:
-        """Zoom in on the time window."""
-        f = 0.75 if factor is None or isinstance(factor, bool) else factor
+        """Zoom in on the visible time viewport."""
+        f = 0.8 if factor is None or isinstance(factor, bool) else factor
         self._apply_zoom(f)
         self._redraw()
 
     def zoom_out(self, factor: Optional[float] = None) -> None:
-        """Zoom out on the time window."""
-        f = 1.33 if factor is None or isinstance(factor, bool) else factor
+        """Zoom out on the visible time viewport."""
+        f = 1.25 if factor is None or isinstance(factor, bool) else factor
         self._apply_zoom(f)
         self._redraw()
 
     def reset_view(self) -> None:
-        """§7.3 — Reset returns to min zoom following live data, not to a
-        fixed default range."""
-        self._x_span = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
+        """Reset view to auto-follow full mission time and auto-scale Y."""
+        data_min = 0.0
+        data_max = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
+        self._view_x_min = data_min
+        self._view_x_max = data_max
+        self._x_span = data_max - data_min
         self._follow = True
+        self._manual_y = False
         self._dirty = True
         self._redraw()
 
@@ -411,6 +538,10 @@ class TelemetryGraph(QWidget):
 
         buf.append(x, y)
         self._latest_x = max(self._latest_x, x)
+        if self._follow:
+            self._view_x_min = 0.0
+            self._view_x_max = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
+            self._x_span = self._view_x_max - self._view_x_min
         self._dirty = True
 
     def mark_annotated_outage(self, x: float, y: float, cause: str) -> None:
@@ -431,9 +562,13 @@ class TelemetryGraph(QWidget):
         self.reset_view()
 
     # ── rendering ────────────────────────────────────────────────────────
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        if self._dirty:
+            self._maybe_redraw()
 
     def _maybe_redraw(self) -> None:
-        if not self._dirty:
+        if not self._dirty or not self.isVisible():
             return
         self._dirty = False
         self._redraw()
@@ -441,9 +576,16 @@ class TelemetryGraph(QWidget):
     def _redraw(self) -> None:
         # ── x window (§7.3) ──────────────────────────────────────────────
         if self._follow:
-            self._x_span = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
-        x_hi = self._latest_x
-        x_lo = x_hi - self._x_span
+            data_min = 0.0
+            data_max = max(self._latest_x, self.zoom_spec.max_zoom_span_s)
+            self._view_x_min = data_min
+            self._view_x_max = data_max
+            self._x_span = data_max - data_min
+            x_lo = self._view_x_min
+            x_hi = self._view_x_max
+        else:
+            x_lo = self._view_x_min
+            x_hi = self._view_x_max
         self.vb.setXRange(x_lo, x_hi, padding=0)
 
         # ── traces, decimated per pixel column (§13.2) ───────────────────
@@ -473,11 +615,13 @@ class TelemetryGraph(QWidget):
             dx, dy = _decimate_with_nans(xs, ys, columns)
             self._curves[name].setData(dx, dy, connect="finite")
 
-            b_lo, b_hi = min(v for v in ys if v == v), max(v for v in ys if v == v)
-            lo_all = b_lo if lo_all is None else min(lo_all, b_lo)
-            hi_all = b_hi if hi_all is None else max(hi_all, b_hi)
+            valid_ys = [v for v in ys if v == v]
+            if valid_ys:
+                b_lo, b_hi = min(valid_ys), max(valid_ys)
+                lo_all = b_lo if lo_all is None else min(lo_all, b_lo)
+                hi_all = b_hi if hi_all is None else max(hi_all, b_hi)
 
-            if name in self._labels:
+            if name in self._labels and xs:
                 # Walk back to the last real sample — ys[-1] can be a NaN
                 # sentinel inserted by _split_on_breaks().  Positioning a
                 # TextItem at NaN silently drops it off-screen.
@@ -488,8 +632,14 @@ class TelemetryGraph(QWidget):
                         break
                 self._labels[name].setPos(label_x, label_y)
 
-        # ── y range, clamped per §8 ──────────────────────────────────────
-        y_lo, y_hi = axspec.clamp_range(self.spec, lo_all, hi_all)
+        # ── y range ──────────────────────────────────────────────────────
+        if not self._manual_y:
+            y_lo, y_hi = axspec.clamp_range(self.spec, lo_all, hi_all)
+            self._view_y_min = y_lo
+            self._view_y_max = y_hi
+        else:
+            y_lo = self._view_y_min
+            y_hi = self._view_y_max
         self.vb.setYRange(y_lo, y_hi, padding=0)
 
         # ── §7.5.3 placeholder ───────────────────────────────────────────

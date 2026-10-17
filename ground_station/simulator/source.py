@@ -71,6 +71,9 @@ class SimulatedSource(QObject):
         self._source_state = SourceState.DISCONNECTED
         self._command_sequence = 0
         self._unack_armed = True
+        self._running = False
+        self._paused = False
+        self._external_driver = False
 
         self._timer = QTimer(self)
         self._timer.setInterval(int(SIM_DT * 1000))
@@ -80,11 +83,50 @@ class SimulatedSource(QObject):
 
     def connect_to(self, *_args, **_kwargs) -> None:
         self._set_source(SourceState.CONNECTED)
-        self._timer.start()
+        if not self._external_driver:
+            self._running = True
+            self._paused = False
+            self._timer.start()
 
     def disconnect_source(self) -> None:
         self._timer.stop()
+        self._running = False
+        self._paused = False
         self._set_source(SourceState.DISCONNECTED)
+
+    def set_external_driver(self, enabled: bool) -> None:
+        """When True, simulation generation is driven by ComPage vehicle controls,
+        preventing duplicate background timers."""
+        self._external_driver = enabled
+        if enabled:
+            self._timer.stop()
+            self._running = False
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._paused = False
+        if not self._external_driver:
+            self._timer.start()
+
+    def pause(self) -> None:
+        if not self._running and self._paused:
+            return
+        self._running = False
+        self._paused = True
+        self._timer.stop()
+
+    def resume(self) -> None:
+        self.start()
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
 
     def send_command(self, target: VehicleID, command: str,
                      sequence: Optional[int] = None) -> int:
@@ -116,6 +158,8 @@ class SimulatedSource(QObject):
     # ── tick ─────────────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        if not self._running or self._paused or self._external_driver:
+            return
         out = self.engine.tick()
 
         for kind, note in out.injected:
@@ -209,7 +253,7 @@ class SimulatedSource(QObject):
     def baudrate(self) -> int:
         return 115200
 
-    def reset(self) -> None:
+    def reset(self, vid: Optional[VehicleID] = None) -> None:
         """Restart the simulation from T=0.
 
         Resets the engine AND restores ``_unack_armed`` so the §10.7
@@ -218,5 +262,10 @@ class SimulatedSource(QObject):
         ``_unack_armed`` stayed ``False``, making the fault permanently
         unavailable after the first restart.
         """
+        if not self._external_driver:
+            self._timer.stop()
+            self._running = False
+            self._paused = False
         self.engine.reset()
+        self.demux.reset(vid)
         self._unack_armed = True

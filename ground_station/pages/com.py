@@ -359,6 +359,8 @@ class PacketStreamPanel(QWidget):
         self.list_view.setModel(self.model)
         self.list_view.setItemDelegate(PacketCardDelegate(self))
         self.list_view.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.list_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_view.verticalScrollBar().setSingleStep(36)
         self.list_view.setStyleSheet(
             f"QListView {{ background-color: {c.BG}; border: none; }} "
             f"QListView::item {{ border: none; padding: 0; }}"
@@ -462,6 +464,8 @@ class PacketInspector(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.verticalScrollBar().setSingleStep(22)
         self.table.setFont(QFont("monospace", FS_BODY))
         self.table.setStyleSheet(
             f"QTableWidget {{ background-color: {c.BG}; color: {c.TEXT}; "
@@ -566,10 +570,12 @@ class PacketInspector(QWidget):
 class VehicleSimulationControl(QWidget):
     """Controls simulation generation for one vehicle."""
 
-    def __init__(self, vehicle_id: VehicleID, on_line_ready: Callable[[str], None], parent=None):
+    def __init__(self, vehicle_id: VehicleID, on_line_ready: Callable[[str], None],
+                 on_reset: Optional[Callable[[VehicleID], None]] = None, parent=None):
         super().__init__(parent)
         self.vehicle_id = vehicle_id
         self.on_line_ready = on_line_ready
+        self.on_reset = on_reset
 
         self.profile = FlightProfile()
         self.flight = SimulatedFlight(vehicle_id, self.profile)
@@ -577,6 +583,7 @@ class VehicleSimulationControl(QWidget):
 
         self.t = 0.0
         self.running = False
+        self.paused = False
 
         self._timer = QTimer(self)
         self._timer.setInterval(100)  # 10 Hz nominal telemetry rate
@@ -643,8 +650,11 @@ class VehicleSimulationControl(QWidget):
         lay.addLayout(btn_row)
 
     def start(self) -> None:
-        c = ThemeManager.C()
+        if self.running:
+            return
         self.running = True
+        self.paused = False
+        c = ThemeManager.C()
         self.status_lbl.setText("RUNNING")
         self.status_lbl.setStyleSheet(
             f"background-color: {c.BG_INPUT}; color: {c.GREEN}; "
@@ -653,30 +663,38 @@ class VehicleSimulationControl(QWidget):
         self._timer.start()
 
     def pause(self) -> None:
-        c = ThemeManager.C()
+        if not self.running and self.paused:
+            return
         self.running = False
+        self.paused = True
+        self._timer.stop()
+        c = ThemeManager.C()
         self.status_lbl.setText("PAUSED")
         self.status_lbl.setStyleSheet(
             f"background-color: {c.BG_INPUT}; color: {c.AMBER}; "
             f"padding: 1px 6px; border-radius: 3px; font-weight: bold;"
         )
-        self._timer.stop()
 
     def reset(self) -> None:
-        c = ThemeManager.C()
-        self._timer.stop()
         self.running = False
+        self.paused = False
+        self._timer.stop()
         self.t = 0.0
         self.flight = SimulatedFlight(self.vehicle_id, self.profile)
+        c = ThemeManager.C()
         self.status_lbl.setText("IDLE")
         self.status_lbl.setStyleSheet(
             f"background-color: {c.BG_INPUT}; color: {c.TEXT_MUTED}; "
             f"padding: 1px 6px; border-radius: 3px;"
         )
         self.info_lbl.setText("T+0.0s │ STATE: BOOT │ ALT: 0.0m")
+        if self.on_reset:
+            self.on_reset(self.vehicle_id)
 
     def _step(self) -> None:
-        self.t += 0.1
+        if not self.running or self.paused:
+            return
+        self.t = round(self.t + 0.1, 3)
         values = self.flight.values(self.t)
         base = self.codec.encode(values)
         # Append simulated marker SIM=1 so it is clearly identified downstream
@@ -686,7 +704,7 @@ class VehicleSimulationControl(QWidget):
         alt = self.flight.altitude_at(self.t)
         self.info_lbl.setText(f"T+{self.t:.1f}s │ STATE: {st} │ ALT: {alt:.1f}m")
 
-        if self.on_line_ready:
+        if self.on_line_ready and self.running and not self.paused:
             self.on_line_ready(line)
 
 
@@ -749,8 +767,8 @@ class ComPage(QWidget):
         sim_lay.setContentsMargins(0, 0, 0, 0)
         sim_lay.setSpacing(6)
 
-        self.sim_rocket = VehicleSimulationControl(VehicleID.ROCKET, self._on_sim_line)
-        self.sim_cansat = VehicleSimulationControl(VehicleID.CANSAT, self._on_sim_line)
+        self.sim_rocket = VehicleSimulationControl(VehicleID.ROCKET, self._on_sim_line, self._on_sim_reset)
+        self.sim_cansat = VehicleSimulationControl(VehicleID.CANSAT, self._on_sim_line, self._on_sim_reset)
         sim_lay.addWidget(self.sim_rocket)
         sim_lay.addWidget(self.sim_cansat)
         left_lay.addWidget(sim_box)
@@ -961,8 +979,8 @@ class ComPage(QWidget):
                 derived_v: Optional[float] = None) -> None:
         """Receive live telemetry packet from the shared pipeline."""
         now = time.monotonic()
-        self._total_packets += 1
         self._valid_packets += 1
+        self._total_packets = self._valid_packets + self._rejected_packets
         self._packet_timestamps.append(now)
         self._last_packet_time = now
 
@@ -977,11 +995,51 @@ class ComPage(QWidget):
         self._update_metrics(packet)
 
     def on_rejected_line(self, reason: str, detail: str, line: str) -> None:
+        now = time.monotonic()
         self._rejected_packets += 1
+        self._total_packets = self._valid_packets + self._rejected_packets
+        self._packet_timestamps.append(now)
+        self._last_packet_time = now
         self._update_metrics()
+
+    def _on_sim_reset(self, vid: VehicleID) -> None:
+        """Reset vehicle stream, demux state, and counters for the reset vehicle."""
+        if vid is VehicleID.ROCKET:
+            self.rocket_stream.model.clear()
+            self.rocket_stream.pkt_counter.setText("0000 PKTS")
+            self.rocket_stream.stack.setCurrentIndex(0)
+        else:
+            self.cansat_stream.model.clear()
+            self.cansat_stream.pkt_counter.setText("0000 PKTS")
+            self.cansat_stream.stack.setCurrentIndex(0)
+
+        if self._supervisor is not None and hasattr(self._supervisor, "reset"):
+            self._supervisor.reset(vid)
+
+        # If both simulations are idle/stopped, reset global metrics
+        if not self.sim_rocket.running and not self.sim_cansat.running and \
+           not self.sim_rocket.paused and not self.sim_cansat.paused:
+            self._total_packets = 0
+            self._valid_packets = 0
+            self._rejected_packets = 0
+            self._packet_timestamps.clear()
+            self._update_metrics()
+            self.last_pkt_val.setText("00:00:00")
+            self.lift_val.setText("STANDBY")
+            self.rate_val.setText("0.0 pkts/s")
 
     def set_supervisor(self, supervisor) -> None:
         self._supervisor = supervisor
+        if hasattr(supervisor, "set_external_driver"):
+            supervisor.set_external_driver(True)
+            self.sim_rocket.start()
+            self.sim_cansat.start()
+            self.mode_badge.setText(" MODE: SIMULATOR ")
+            c = ThemeManager.C()
+            self.mode_badge.setStyleSheet(
+                f"background-color: {c.BG_INPUT}; color: #8b5cf6; "
+                f"border: 1px solid #8b5cf6; border-radius: 4px; padding: 3px 10px;"
+            )
         self._update_connection_info()
 
     def set_source_state(self, state: SourceState) -> None:
@@ -1007,11 +1065,12 @@ class ComPage(QWidget):
     def _on_sim_line(self, line: str) -> None:
         """Feed simulated line into the shared supervisor pipeline."""
         c = ThemeManager.C()
-        self.mode_badge.setText(" MODE: SIMULATION ")
-        self.mode_badge.setStyleSheet(
-            f"background-color: {c.BG_INPUT}; color: #8b5cf6; "
-            f"border: 1px solid #8b5cf6; border-radius: 4px; padding: 3px 10px;"
-        )
+        if self._source_mode != "SIMULATION":
+            self.mode_badge.setText(" MODE: SIMULATION ")
+            self.mode_badge.setStyleSheet(
+                f"background-color: {c.BG_INPUT}; color: #8b5cf6; "
+                f"border: 1px solid #8b5cf6; border-radius: 4px; padding: 3px 10px;"
+            )
 
         if self._supervisor is not None and hasattr(self._supervisor, "inject_line"):
             self._supervisor.inject_line(line)

@@ -39,9 +39,9 @@ from ..graphs.plot import TelemetryGraph
 from ..theme import ThemeManager, FS_HEADING, FS_CAPTION
 from ..timeline import StateTimeline
 from ..widgets.gauges import GaugeField
-from ..widgets.gauges import GaugeField
 from ..widgets.telemetry_panel import TelemetryPanel
 from ..widgets.telemetry_detail import TelemetryDetailWidget
+from ..widgets.scroll_area import GroundStationScrollArea
 
 
 class VehiclePage(QWidget):
@@ -101,10 +101,7 @@ class VehiclePage(QWidget):
 
         outer.addLayout(self._header())
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll = GroundStationScrollArea()
         body = QWidget()
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -126,6 +123,7 @@ class VehiclePage(QWidget):
         body_layout.addWidget(self._timeline_panel())
         body_layout.addStretch()
 
+        scroll.attach_child_wheel_passthrough(self._timeline_table)
         scroll.setWidget(body)
         outer.addWidget(scroll)
 

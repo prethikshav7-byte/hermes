@@ -511,6 +511,11 @@ class LinkSupervisor(QObject):
         for msg in self.demux.drain_notices():
             self.notice.emit(msg)
 
+    def reset(self, vid: Optional[VehicleID] = None) -> None:
+        """Reset demux streams and state."""
+        self.demux.reset(vid)
+        self._poll_health()
+
     # ── read-only views for the health strip (§6.5) ──────────────────────
 
     @property

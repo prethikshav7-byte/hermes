@@ -155,6 +155,19 @@ class VehicleStream:
         self.awaiting_refresh: bool = False
         self.pre_refresh_mission_time: Optional[float] = None
 
+    def reset(self) -> None:
+        """Reset mutable stream tracking and counters for a fresh mission/simulation session."""
+        self.counters = StreamCounters()
+        self.last_packet = None
+        self._last_packet_count = None
+        self._last_mission_time = None
+        self._last_received_at = 0.0
+        self._first_received_at = None
+        self._window.clear()
+        self._reported_unknown_extras.clear()
+        self.awaiting_refresh = False
+        self.pre_refresh_mission_time = None
+
     # ── ingest ───────────────────────────────────────────────────────────
 
     def ingest(self, packet: TelemetryPacket) -> IngestResult:
@@ -310,6 +323,19 @@ class TelemetryDemux:
         self.notices: List[str] = []
         self._latest_rssi: Optional[float] = None
         self._latest_snr: Optional[float] = None
+
+    def reset(self, vid: Optional[VehicleID] = None) -> None:
+        """Reset demux streams and state."""
+        if vid is not None:
+            if vid in self.streams:
+                self.streams[vid].reset()
+        else:
+            for stream in self.streams.values():
+                stream.reset()
+            self.last_heartbeat = None
+            self._last_heartbeat_at = 0.0
+            self.ignored_lines = 0
+            self.notices.clear()
 
     def feed(self, line: str, received_at: Optional[float] = None
              ) -> Optional[IngestResult]:

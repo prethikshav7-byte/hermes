@@ -38,18 +38,44 @@ from .parser import ExperimentDataset, split_on_time_gaps
 
 
 class ProfileViewBox(pg.ViewBox):
-    """§11.10 — pinch zooms both axes together; scroll never zooms."""
+    """§11.10 — pinch zooms both axes together; mouse drag pans; scroll never zooms."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.selected = False
         self.setMouseEnabled(x=False, y=False)
         self.setMenuEnabled(False)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._dragging = False
 
     def wheelEvent(self, ev, axis=None):
-        # Same rule as the telemetry graphs: accepted rather than ignored
-        # so it cannot bubble to a parent scroll area and move the page.
+        # §11.10: Scroll never zooms. Ignore event so it bubbles up to
+        # parent dashboard scroll container for fluid page scrolling.
+        ev.ignore()
+
+    def mouseDragEvent(self, ev, axis=None):
         ev.accept()
+        if ev.button() == Qt.MouseButton.LeftButton:
+            if ev.isStart():
+                self._dragging = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+            p1 = self.mapToView(ev.lastPos())
+            p2 = self.mapToView(ev.pos())
+            dx = -(p2.x() - p1.x())
+            dy = -(p2.y() - p1.y())
+            self.translateBy((dx, dy))
+
+            if ev.isFinish():
+                self._dragging = False
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+
+class ProfilePlotWidget(pg.PlotWidget):
+    """PlotWidget that passes wheel events to the parent dashboard scroll container."""
+
+    def wheelEvent(self, ev):
+        ev.ignore()
 
 
 class AerosolProfilePlot(QWidget):
@@ -71,8 +97,8 @@ class AerosolProfilePlot(QWidget):
         lay.setContentsMargins(4, 4, 4, 4)
 
         self.vb = ProfileViewBox()
-        self.plot = pg.PlotWidget(viewBox=self.vb, background=c.BG_CARD)
-        self.plot.setAntialiasing(True)
+        self.plot = ProfilePlotWidget(viewBox=self.vb, background=c.BG_CARD)
+        self.plot.setAntialiasing(False)
         self.plot.showGrid(x=True, y=True, alpha=0.12)
 
         for side in ("left", "bottom"):
@@ -289,7 +315,8 @@ class SecondaryPlot(QWidget):
         lay.setContentsMargins(4, 4, 4, 4)
 
         self.vb = ProfileViewBox()
-        self.plot = pg.PlotWidget(viewBox=self.vb, background=c.BG_CARD)
+        self.plot = ProfilePlotWidget(viewBox=self.vb, background=c.BG_CARD)
+        self.plot.setAntialiasing(False)
         self.plot.showGrid(x=True, y=True, alpha=0.12)
         style = {"color": c.TEXT_DIM, "font-size": "9pt"}
         self.plot.setLabel("bottom", "Mission Time (s)", **style)

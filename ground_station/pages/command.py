@@ -47,6 +47,7 @@ try:
         FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
     )
     from ..theme import ThemeManager
+    from ..widgets.scroll_area import GroundStationScrollArea
 except (ImportError, ValueError):
     import sys
     from pathlib import Path
@@ -63,6 +64,7 @@ except (ImportError, ValueError):
         FlightState, GROUND_STATES, RocketSafetyState, VehicleID, VehicleLinkState,
     )
     from ground_station.theme import ThemeManager
+    from ground_station.widgets.scroll_area import GroundStationScrollArea
 
 
 def _btn_css(accent: str) -> str:
@@ -814,8 +816,7 @@ class CommandPage(QWidget):
         self._banner.setVisible(False)
         outer.addWidget(self._banner)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        scroll = GroundStationScrollArea()
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(12, 12, 12, 12)
@@ -855,6 +856,7 @@ class CommandPage(QWidget):
         self.log_panel = CommandLogPanel(self.centre)
         self.log_panel.resend_requested.connect(self.centre.resend)
         lay.addWidget(self.log_panel)
+        scroll.attach_child_wheel_passthrough(self.log_panel._scroll)
 
         lay.addStretch()
         scroll.setWidget(body)
