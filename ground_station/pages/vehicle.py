@@ -312,7 +312,7 @@ class VehiclePage(QWidget):
         for entry in self.timeline.observe(packet.state, packet.mission_time):
             if entry.backward:
                 self.backward_transition.emit(
-                    f"⚠ BACKWARD TRANSITION: {packet.state.value} "
+                    f"WARNING: BACKWARD TRANSITION: {packet.state.value} "
                     f"at T+{packet.mission_time:.2f} s — see timeline")
         self._refresh_timeline()
 
@@ -436,9 +436,9 @@ class VehiclePage(QWidget):
             # ── Flags ─────────────────────────────────────────────────────
             flags: list[str] = []
             if e.backward:
-                flags.append("⚠ BACKWARD TRANSITION")
+                flags.append("WARNING: BACKWARD TRANSITION")
             if self.timeline.continuity_broken and e is entries[-1]:
-                flags.append("⚠ CONTINUITY BROKEN")
+                flags.append("WARNING: CONTINUITY BROKEN")
             flag_item = QTableWidgetItem("  ".join(flags))
 
             # ── Per-row colour ────────────────────────────────────────────

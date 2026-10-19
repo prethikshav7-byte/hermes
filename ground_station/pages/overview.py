@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from .. import axes as axspec
@@ -33,6 +33,40 @@ from ..graphs.plot import TelemetryGraph
 from ..theme import ThemeManager
 from ..widgets.health_strip import HealthStrip
 from ..widgets.scroll_area import GroundStationScrollArea
+
+
+class SectionBanner(QWidget):
+    """Aerospace telemetry section header banner matching MachZone identity."""
+
+    def __init__(self, vid: VehicleID, parent=None):
+        super().__init__(parent)
+        c = ThemeManager.C()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 6, 4, 6)
+        row.setSpacing(10)
+
+        # Vehicle title
+        name_lbl = QLabel(vid.value)
+        name_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        name_lbl.setStyleSheet("color: #ffffff; letter-spacing: 2px;")
+        row.addWidget(name_lbl)
+
+        # Subtle gradient divider line
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 {c.RED}, stop:0.35 {c.ORANGE}, stop:0.75 transparent, stop:1 transparent); "
+            f"height: 1px; border: none; max-height: 1px;"
+        )
+        row.addWidget(line, stretch=1)
+
+        # Right realtime telemetry badge
+        sub_text = "TELEMETRY · REALTIME" if vid is VehicleID.ROCKET else "CANSAT TELEMETRY · REALTIME"
+        right_lbl = QLabel(sub_text)
+        right_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        right_lbl.setStyleSheet(f"color: {c.TEXT_DIM}; letter-spacing: 1.5px;")
+        row.addWidget(right_lbl)
 
 
 class OverviewPage(QWidget):
@@ -59,6 +93,7 @@ class OverviewPage(QWidget):
 
         scroll = GroundStationScrollArea()
         body = QWidget()
+        body.setStyleSheet("background: transparent;")
         lay = QVBoxLayout(body)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(12)
@@ -74,13 +109,11 @@ class OverviewPage(QWidget):
         c = ThemeManager.C()
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setContentsMargins(0, 4, 0, 8)
+        lay.setSpacing(8)
 
-        head = QLabel(vid.value)
-        head.setFont(QFont("monospace", 11, QFont.Weight.Bold))
-        head.setStyleSheet(f"color: {c.CYAN};")
-        lay.addWidget(head)
+        banner = SectionBanner(vid)
+        lay.addWidget(banner)
 
         grid = QGridLayout()
         grid.setSpacing(8)

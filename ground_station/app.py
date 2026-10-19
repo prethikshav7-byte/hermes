@@ -21,11 +21,13 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+import os
+
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QMainWindow, QProgressBar, QPushButton,
+    QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .models import (
@@ -45,8 +47,9 @@ from .theme import ThemeManager
 class NavButton(QPushButton):
     def __init__(self, text: str, parent=None):
         super().__init__(text, parent)
+        self.nav_key = text
         self.setCheckable(True)
-        self.setFont(QFont("monospace", 9, QFont.Weight.Bold))
+        self.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._restyle()
 
@@ -54,14 +57,185 @@ class NavButton(QPushButton):
         c = ThemeManager.C()
         self.setStyleSheet(
             f"QPushButton {{ background-color: transparent; color: {c.TEXT_DIM}; "
-            f"border: none; border-left: 3px solid transparent; "
-            f"padding: 11px 16px; text-align: left; }}"
+            f"border: 1px solid transparent; border-radius: 6px; "
+            f"padding: 10px 14px; margin: 2px 10px; text-align: left; "
+            f"font-family: 'Segoe UI', Arial, sans-serif; }}"
             f"QPushButton:hover {{ background-color: {c.BG_CARD_HOVER}; "
-            f"color: {c.TEXT}; }}"
+            f"color: {c.TEXT}; border: 1px solid {c.BORDER}; }}"
             f"QPushButton:checked {{ color: {c.CYAN}; "
-            f"border-left: 3px solid {c.CYAN}; "
-            f"background-color: {c.BG_CARD}; }}"
+            f"background-color: #0e263d; border: 1px solid #0284c7; font-weight: bold; }}"
             f"QPushButton:disabled {{ color: {c.TEXT_MUTED}; }}")
+
+
+class MachZoneHeader(QWidget):
+    """Aerospace header banner with MachZone branding and live connection telemetry."""
+
+    def __init__(self, mode_label: str = "", simulator_mode: bool = False, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(54)
+        c = ThemeManager.C()
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 0, 16, 0)
+        row.setSpacing(12)
+
+        # Brand Container (Left)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+
+        # Title: MACHZONE
+        title = QLabel("MACHZONE")
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Black))
+        title.setStyleSheet("color: #ffffff; letter-spacing: 3px;")
+        brand_row.addWidget(title)
+
+        # Divider bar
+        div = QLabel("|")
+        div.setFont(QFont("Segoe UI", 11, QFont.Weight.Light))
+        div.setStyleSheet(f"color: {c.RED}; padding: 0 2px;")
+        brand_row.addWidget(div)
+
+        # Tagline / Sublabel
+        tagline = QLabel("BEYOND MACH, BEYOND LIMITS")
+        tagline.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        tagline.setStyleSheet(f"color: {c.TEXT_DIM}; letter-spacing: 2px;")
+        brand_row.addWidget(tagline)
+
+        row.addLayout(brand_row)
+        row.addStretch(1)
+
+        # Connection Pill
+        init_status = "● SIMULATOR" if simulator_mode else "● CONNECTED"
+        self.pill_status = QLabel(init_status)
+        self.pill_status.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self.pill_status.setStyleSheet(
+            f"background-color: rgba(13, 26, 40, 0.85); color: {c.CYAN if simulator_mode else c.GREEN}; "
+            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
+        )
+        row.addWidget(self.pill_status)
+
+        # COM Port Pill
+        port_text = "SIM" if simulator_mode else "COM9"
+        self.pill_port = QLabel(f"PORT: {port_text}")
+        self.pill_port.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        self.pill_port.setStyleSheet(
+            f"background-color: rgba(13, 26, 40, 0.85); color: {c.TEXT}; "
+            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 4px 10px;"
+        )
+        row.addWidget(self.pill_port)
+
+        # Baud Rate Pill
+        self.pill_baud = QLabel("Baud 115200")
+        self.pill_baud.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        self.pill_baud.setStyleSheet(
+            f"background-color: rgba(13, 26, 40, 0.85); color: {c.TEXT_DIM}; "
+            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 4px 10px;"
+        )
+        row.addWidget(self.pill_baud)
+
+    def paintEvent(self, ev) -> None:
+        super().paintEvent(ev)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = ThemeManager.C()
+
+        # Solid background
+        p.fillRect(self.rect(), QColor(c.BG_PANEL))
+
+        # Aerodynamic supersonic flow curves in background
+        w = self.width()
+        h = self.height()
+        path1 = QPainterPath()
+        path1.moveTo(w * 0.40, h * 0.20)
+        path1.cubicTo(w * 0.55, h * 0.15, w * 0.70, h * 0.80, w * 0.95, h * 0.30)
+        p.setPen(QPen(QColor(255, 65, 30, 40), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path1)
+
+        path2 = QPainterPath()
+        path2.moveTo(w * 0.45, h * 0.35)
+        path2.cubicTo(w * 0.60, h * 0.30, w * 0.75, h * 0.90, w * 0.98, h * 0.45)
+        p.setPen(QPen(QColor(249, 115, 22, 28), 1.5))
+        p.drawPath(path2)
+
+        # Bottom divider border
+        p.setPen(QPen(QColor(c.BORDER), 1))
+        p.drawLine(0, h - 1, w, h - 1)
+        p.end()
+
+    def set_source_state(self, state: SourceState) -> None:
+        c = ThemeManager.C()
+        colour = {
+            SourceState.CONNECTED: c.GREEN,
+            SourceState.CONNECTING: c.AMBER,
+            SourceState.NO_DATA: c.AMBER,
+            SourceState.LINK_ERROR: c.RED,
+            SourceState.DISCONNECTED: c.TEXT_MUTED,
+        }.get(state, c.TEXT_MUTED)
+        self.pill_status.setText(f"● {state.value}")
+        self.pill_status.setStyleSheet(
+            f"background-color: rgba(13, 26, 40, 0.85); color: {colour}; "
+            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
+        )
+
+    def update_supervisor_info(self, supervisor) -> None:
+        port = getattr(supervisor, "port_name", "—")
+        baud = getattr(supervisor, "baudrate", 115200)
+        self.pill_port.setText(f"PORT: {port}")
+        self.pill_baud.setText(f"Baud {baud}")
+
+
+class SidebarFooter(QWidget):
+    """Bottom slogan badge."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(76)
+        c = ThemeManager.C()
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 12, 16, 16)
+        row.setSpacing(10)
+
+        # Vertical red accent bar
+        bar = QFrame()
+        bar.setFixedWidth(2)
+        bar.setStyleSheet(f"background-color: {c.RED}; border: none;")
+        row.addWidget(bar)
+
+        text_lay = QVBoxLayout()
+        text_lay.setContentsMargins(0, 0, 0, 0)
+        text_lay.setSpacing(2)
+
+        t1 = QLabel("SMALL STEPS")
+        t1.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        t1.setStyleSheet(f"color: {c.TEXT_DIM}; letter-spacing: 1.5px;")
+
+        t2 = QLabel("BIG ALTITUDES")
+        t2.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        t2.setStyleSheet(f"color: {c.TEXT_MUTED}; letter-spacing: 1.5px;")
+
+        text_lay.addWidget(t1)
+        text_lay.addWidget(t2)
+        row.addLayout(text_lay)
+        row.addStretch()
+
+    def paintEvent(self, ev) -> None:
+        super().paintEvent(ev)
+
+
+class MainDashboardArea(QWidget):
+    """Main dashboard content container."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def paintEvent(self, ev) -> None:
+        p = QPainter(self)
+        c = ThemeManager.C()
+        # Solid base background
+        p.fillRect(self.rect(), QColor(c.BG))
+        p.end()
 
 
 class GroundStationApp(QMainWindow):
@@ -82,26 +256,39 @@ class GroundStationApp(QMainWindow):
         self.rocket_page = self.pages[VehicleID.ROCKET]
         self.cansat_page = self.pages[VehicleID.CANSAT]
 
-        # Fix 1 / §5.2 — give the backward_transition signal a receiver so
-        # anomalies reach the status bar.  Connected here (once, at
-        # construction) rather than per-packet so there is never a window
-        # where the signal exists but has no handler attached.
         for page in self.pages.values():
             page.backward_transition.connect(self._on_notice)
 
-        # §1.4 — the CommandCentre's transmit callback is set in
-        # connect_supervisor. Until then it is a no-op, so a command
-        # cannot escape before there is a link to carry it.
         self.command_centre = CommandCentre(
             transmit=lambda target, command, seq: None)
-        # §2.5 — ENTER_SIMULATION is disabled while in Simulator Mode; the
-        # page needs to know which mode the app launched in.
         self.command_page = CommandPage(self.command_centre, simulator_mode)
         self.command_page.notice.connect(self._on_notice)
         self.experiment_page = ExperimentPage()
         self.com_page = ComPage()
 
         self._build(mode_label)
+
+        # Status Bar aerospace telemetry footer
+        c = ThemeManager.C()
+        self._status_telemetry = QLabel("● Receiving Telemetry...")
+        self._status_telemetry.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        self._status_telemetry.setStyleSheet(f"color: {c.TEXT_DIM}; padding-left: 10px;")
+        self.statusBar().addWidget(self._status_telemetry)
+
+        self._status_bar_prog = QProgressBar()
+        self._status_bar_prog.setRange(0, 0)
+        self._status_bar_prog.setFixedSize(65, 4)
+        self._status_bar_prog.setTextVisible(False)
+        self._status_bar_prog.setStyleSheet(
+            f"QProgressBar {{ background-color: rgba(255,255,255,0.06); border: none; border-radius: 2px; }}"
+            f"QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {c.RED}, stop:1 {c.ORANGE}); border-radius: 2px; }}"
+        )
+        self.statusBar().addWidget(self._status_bar_prog)
+
+        self._status_right = QLabel("MACHZONE  |  GROUND STATION  ")
+        self._status_right.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        self._status_right.setStyleSheet(f"color: {c.TEXT_MUTED}; letter-spacing: 1.5px;")
+        self.statusBar().addPermanentWidget(self._status_right)
 
     # ── construction ─────────────────────────────────────────────────────
 
@@ -117,6 +304,16 @@ class GroundStationApp(QMainWindow):
 
         row.addWidget(self._sidebar(mode_label))
 
+        main_area = MainDashboardArea()
+        main_lay = QVBoxLayout(main_area)
+        main_lay.setContentsMargins(0, 0, 0, 0)
+        main_lay.setSpacing(0)
+
+        self.header = MachZoneHeader(
+            mode_label=mode_label, simulator_mode=self.simulator_mode
+        )
+        main_lay.addWidget(self.header)
+
         self.stack = QStackedWidget()
         self.stack.addWidget(self.overview_page)
         self.stack.addWidget(self.rocket_page)
@@ -124,7 +321,9 @@ class GroundStationApp(QMainWindow):
         self.stack.addWidget(self.command_page)
         self.stack.addWidget(self.experiment_page)
         self.stack.addWidget(self.com_page)
-        row.addWidget(self.stack, stretch=1)
+        main_lay.addWidget(self.stack, stretch=1)
+
+        row.addWidget(main_area, stretch=1)
 
         self.setCentralWidget(root)
         self._nav[0].setChecked(True)
@@ -136,22 +335,14 @@ class GroundStationApp(QMainWindow):
         bar.setStyleSheet(ThemeManager.sidebar_stylesheet())
 
         lay = QVBoxLayout(bar)
-        lay.setContentsMargins(0, 16, 0, 16)
-        lay.setSpacing(2)
-
-        title = QLabel("  GROUND STATION")
-        title.setFont(QFont("monospace", 11, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {c.CYAN}; padding: 8px 12px;")
-        lay.addWidget(title)
+        lay.setContentsMargins(0, 8, 0, 8)
+        lay.setSpacing(4)
 
         if mode_label:
             badge = QLabel(f"  {mode_label}")
-            badge.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-            # §2.5 — the mode is named unambiguously and stays on screen.
-            # "Simulator Mode" is the app-side thing; the vehicle-side
-            # telecommand is "Flight Software Simulation" and is never
-            # given this label.
-            badge.setStyleSheet(f"color: {c.GREEN}; padding: 0 12px 10px;")
+            badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setStyleSheet(f"color: {c.GREEN}; padding: 14px 12px 10px; letter-spacing: 1.5px;")
             lay.addWidget(badge)
 
         self._nav: List[NavButton] = []
@@ -171,6 +362,9 @@ class GroundStationApp(QMainWindow):
             lay.addWidget(b)
 
         lay.addStretch()
+
+        footer = SidebarFooter()
+        lay.addWidget(footer)
         return bar
 
     def _navigate(self, index: int) -> None:
@@ -192,6 +386,7 @@ class GroundStationApp(QMainWindow):
         supervisor.notice.connect(self._on_notice)
         self._supervisor = supervisor
         self.com_page.set_supervisor(supervisor)
+        self.header.update_supervisor_info(supervisor)
         # §1.4 — the only place a transmit path is installed, installed
         # once. Nothing in the app calls send() on a timer; every call
         # originates in a widget's clicked handler.
@@ -243,6 +438,7 @@ class GroundStationApp(QMainWindow):
             self._telemetry_connected = False
         self.overview_page.health.set_source(state)
         self.com_page.set_source_state(state)
+        self.header.set_source_state(state)
 
     def _on_receiver_state(self, state: ReceiverState) -> None:
         self.overview_page.health.set_receiver(state)

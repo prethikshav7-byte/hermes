@@ -25,11 +25,12 @@ list bound by stable USB identifier and remembered across sessions.
 """
 from __future__ import annotations
 
+import os
 from enum import Enum
 from typing import List, Optional
 
 from PyQt6.QtCore import QSettings, Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
@@ -83,12 +84,38 @@ class LauncherDialog(QDialog):
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(16)
 
-        title = QLabel("Ground Station")
-        # §2 — 13pt is the correct cap for a dialog title in this scale.
-        # 20pt was jarring next to the 8pt subtitle directly below it.
-        title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {c.CYAN};")
-        lay.addWidget(title)
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "machzone_logo.png"
+        )
+        if os.path.exists(logo_path):
+            logo_row = QHBoxLayout()
+            logo_row.setSpacing(14)
+            logo_lbl = QLabel()
+            pm = QPixmap(logo_path).scaled(
+                50, 50, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_lbl.setPixmap(pm)
+            logo_row.addWidget(logo_lbl)
+
+            header_text = QVBoxLayout()
+            header_text.setSpacing(2)
+            brand_lbl = QLabel("MACHZONE")
+            brand_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Black))
+            brand_lbl.setStyleSheet("color: #ffffff; letter-spacing: 2.5px;")
+            title = QLabel("Ground Station Launcher")
+            title.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+            title.setStyleSheet(f"color: {c.CYAN};")
+            header_text.addWidget(brand_lbl)
+            header_text.addWidget(title)
+            logo_row.addLayout(header_text)
+            logo_row.addStretch()
+            lay.addLayout(logo_row)
+        else:
+            title = QLabel("Ground Station")
+            title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+            title.setStyleSheet(f"color: {c.CYAN};")
+            lay.addWidget(title)
 
         sub = QLabel("Choose a data source. This is fixed for the session — "
                      "switching requires restarting the app.")

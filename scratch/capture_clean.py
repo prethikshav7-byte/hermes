@@ -31,6 +31,9 @@ for _ in range(10):
     time.sleep(0.02)
 
 save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "continuous_sim_overview.png")
-pix = win.overview_page.grab()
+artifact_path = r"C:\Users\hilar\.gemini\antigravity-ide\brain\f2abb91a-6a24-48fd-a83e-57b910339851\overview_redesign.png"
+pix = win.grab()
 pix.save(save_path)
-print(f"Saved to: {save_path}, exists: {os.path.exists(save_path)}")
+pix.save(artifact_path)
+print(f"Saved to: {artifact_path}, exists: {os.path.exists(artifact_path)}")
+sys.exit(0)

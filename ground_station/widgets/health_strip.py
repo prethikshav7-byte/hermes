@@ -36,15 +36,19 @@ from ..theme import ThemeManager
 
 
 def _dot(colour: str) -> str:
-    return f"color: {colour}; font-size: 14px;"
+    return f"color: {colour}; font-size: 13px;"
 
 
 class _Indicator(QWidget):
-    """One labelled status light."""
+    """One labelled status light with aerospace badge styling."""
 
     def __init__(self, caption: str, parent=None):
         super().__init__(parent)
         c = ThemeManager.C()
+        self.setStyleSheet(
+            f"QWidget {{ background-color: {c.BG_CARD}; border: 1px solid {c.BORDER}; "
+            f"border-radius: 4px; }} QLabel {{ border: none; background: transparent; }}"
+        )
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 2, 8, 2)
         row.setSpacing(6)
@@ -53,11 +57,11 @@ class _Indicator(QWidget):
         self._dot.setStyleSheet(_dot(c.TEXT_MUTED))
 
         self._caption = QLabel(caption)
-        self._caption.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self._caption.setStyleSheet(f"color: {c.TEXT_DIM};")
+        self._caption.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self._caption.setStyleSheet(f"color: {c.TEXT_DIM}; letter-spacing: 0.5px;")
 
         self._value = QLabel("—")
-        self._value.setFont(QFont("monospace", 8))
+        self._value.setFont(QFont("monospace", 8, QFont.Weight.Bold))
         self._value.setStyleSheet(f"color: {c.TEXT};")
 
         row.addWidget(self._dot)
@@ -81,9 +85,7 @@ class HealthStrip(QWidget):
             f"border-bottom: 1px solid {c.BORDER};")
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
-        # §18 — pin height so the strip never shifts the page below it
-        # when font rendering varies between platforms or display scales.
-        self.setFixedHeight(36)
+        self.setFixedHeight(34)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 4, 6, 4)

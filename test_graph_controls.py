@@ -111,6 +111,9 @@ def test_graph_controls():
     exp.aero_time.btn_reset.click()
 
     os.makedirs("scratch", exist_ok=True)
+    os.makedirs("scratch/renders_redesign", exist_ok=True)
+    win.grab().save("scratch/renders_redesign/overview_sim.png")
+    win.grab().save(r"C:\Users\hilar\.gemini\antigravity-ide\brain\f2abb91a-6a24-48fd-a83e-57b910339851\overview_redesign.png")
     win.overview_page.grab().save("scratch/overview_page.png")
     win.rocket_page.grab().save("scratch/rocket_page.png")
     win.cansat_page.grab().save("scratch/cansat_page.png")

@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+import os
 from PyQt6.QtCore import QEvent, QObject, QPoint, Qt
-from PyQt6.QtGui import QWheelEvent
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import QAbstractScrollArea, QScrollArea, QWidget
 
 
@@ -35,6 +36,8 @@ class GroundStationScrollArea(QScrollArea):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setFrameShape(QScrollArea.Shape.NoFrame)
         self.verticalScrollBar().setSingleStep(self.WHEEL_STEP_PX)
+        self.viewport().setAutoFillBackground(False)
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
     def wheelEvent(self, ev: QWheelEvent) -> None:
         """Handle wheel and touchpad events with zero delay."""

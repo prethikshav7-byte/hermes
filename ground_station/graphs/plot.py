@@ -33,7 +33,7 @@ import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from .. import axes as axspec
@@ -153,6 +153,33 @@ def _decimate_with_nans(xs: List[float], ys: List[float],
 # ─────────────────────────────────────────────────────────────────────────────
 #  The graph
 # ─────────────────────────────────────────────────────────────────────────────
+#  Telemetry Channel Colors and Icons
+# ─────────────────────────────────────────────────────────────────────────────
+
+CHANNEL_COLORS: Dict[str, str] = {
+    "altitude": "#38bdf8",
+    "velocity": "#22c55e",
+    "descent_rate": "#22c55e",
+    "temperature": "#f97316",
+    "acceleration": "#a855f7",
+    "pressure": "#38bdf8",
+    "orientation": "#f43f5e",
+}
+
+CHANNEL_ICONS: Dict[str, str] = {
+    "altitude": "▲",
+    "velocity": "►",
+    "descent_rate": "↓",
+    "temperature": "◇",
+    "acceleration": "∿",
+    "pressure": "⊕",
+    "orientation": "↻",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  The graph
+# ─────────────────────────────────────────────────────────────────────────────
 
 class TelemetryGraph(QWidget):
     """One live time-series channel."""
@@ -167,7 +194,7 @@ class TelemetryGraph(QWidget):
     #: §7.1 — outline thickness, drawn outside the plot area and inside
     #: the widget padding so it never overlaps axis labels or the trace.
     SELECT_BORDER_PX = 2
-    SELECT_PADDING_PX = 3
+    SELECT_PADDING_PX = 2
 
     def __init__(self, axis_key: str, spec: Optional[axspec.AxisSpec] = None,
                  traces: Optional[Sequence[Tuple[str, str]]] = None,
@@ -185,7 +212,8 @@ class TelemetryGraph(QWidget):
         self.spec = spec or axspec.BY_KEY[axis_key]
         self.zoom_spec = axspec.zoom_for(axis_key)
 
-        self._traces = list(traces) if traces else [("", c.CYAN)]
+        self._channel_color = CHANNEL_COLORS.get(axis_key, c.CYAN)
+        self._traces = list(traces) if traces else [("", self._channel_color)]
         self._multi = bool(traces) and len(self._traces) > 1
 
         self._buffers: Dict[str, RingBuffer] = {
@@ -229,47 +257,53 @@ class TelemetryGraph(QWidget):
         layout = QVBoxLayout(self)
         pad = self.SELECT_BORDER_PX + self.SELECT_PADDING_PX
         layout.setContentsMargins(pad, pad, pad, pad)
+        layout.setSpacing(0)
 
-        self.vb = TelemetryViewBox()
-        self.vb.sig_panned.connect(self.pan_by)
-        self.vb.sig_clicked.connect(self._on_vb_clicked)
-        self.plot = TelemetryPlotWidget(viewBox=self.vb, background=c.BG_CARD)
-        self.plot.setAntialiasing(False)
+        # Telemetry Card Frame
+        self.card = QFrame(self)
+        self.card.setObjectName("TelemetryCard")
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(8, 6, 8, 6)
+        card_layout.setSpacing(4)
 
-        # §7.4 — axis titles outside the plot area, no legend anywhere.
-        # Fixed label space reserved on both axes so the titles can never
-        # overlap tick labels, the plot border, or the trace.
-        label_style = {"color": c.TEXT_DIM, "font-size": "9pt"}
-        self.plot.setLabel("bottom", "Time (s)", **label_style)
-        self.plot.setLabel("left", self.spec.axis_title(), **label_style)
-        self.plot.getAxis("left").setWidth(64)
-        self.plot.getAxis("bottom").setHeight(38)
-        for side in ("left", "bottom"):
-            ax = self.plot.getAxis(side)
-            ax.enableAutoSIPrefix(False)
-            ax.setPen(pg.mkPen(c.BORDER))
-            ax.setTextPen(pg.mkPen(c.TEXT_DIM))
-            ax.setStyle(tickFont=QFont("monospace", 8))
+        # Header Row: Icon, Title, Numerical Value, and Controls
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(4, 2, 4, 2)
+        hdr.setSpacing(6)
 
-        self.plot.showGrid(x=True, y=True, alpha=0.12)
+        is_descent = (self.axis_key == "descent_rate" or
+                      self.spec is axspec.DESCENT_RATE or
+                      getattr(self.spec, "name", "") == "Descent Rate")
 
-        for name, colour in self._traces:
-            pen = pg.mkPen(QColor(colour), width=2)
-            self._curves[name] = self.plot.plot([], [], pen=pen)
-            if self._multi:
-                # §7.4 — multi-trace graphs still need trace
-                # identification, but with inline end-of-line labels
-                # rather than a floating legend box.
-                lbl = pg.TextItem(name, color=colour, anchor=(0, 0.5))
-                lbl.setFont(QFont("monospace", 8))
-                self.plot.addItem(lbl)
-                self._labels[name] = lbl
+        display_title = self.spec.axis_title()
+        if is_descent:
+            display_title = "Descent Rate (m/s)"
+        elif self.axis_key == "altitude":
+            display_title = "Altitude (m/AGL)"
+        elif self.axis_key == "orientation":
+            display_title = "Gyro Spin Rate (deg/s)"
+        elif self.axis_key == "velocity":
+            display_title = "Velocity (m/s)"
+        elif self.axis_key == "pressure":
+            display_title = "Pressure (Pa)"
+        elif self.axis_key == "temperature":
+            display_title = "Temperature (°C)"
+        elif self.axis_key == "acceleration":
+            display_title = "Acceleration (m/s²)"
 
-        # Graph control toolbar (Reset, Zoom Out, Zoom In)
-        tb = QHBoxLayout()
-        tb.setContentsMargins(0, 0, 2, 2)
-        tb.setSpacing(3)
-        tb.addStretch()
+        self.lbl_title = QLabel(display_title)
+        self.lbl_title.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self.lbl_title.setStyleSheet(f"color: {c.TEXT_DIM};")
+        hdr.addWidget(self.lbl_title)
+
+        hdr.addStretch(1)
+
+        self.lbl_value = QLabel("—")
+        self.lbl_value.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_value.setMinimumWidth(120)
+        self.lbl_value.setStyleSheet(f"color: {self._channel_color}; margin-right: 8px;")
+        hdr.addWidget(self.lbl_value)
 
         btn_style = ThemeManager.graph_button_stylesheet()
 
@@ -291,22 +325,49 @@ class TelemetryGraph(QWidget):
         self.btn_zoom_in.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_zoom_in.clicked.connect(lambda: self.zoom_in())
 
-        tb.addWidget(self.btn_reset)
-        tb.addWidget(self.btn_zoom_out)
-        tb.addWidget(self.btn_zoom_in)
-        layout.addLayout(tb)
+        hdr.addWidget(self.btn_reset)
+        hdr.addWidget(self.btn_zoom_out)
+        hdr.addWidget(self.btn_zoom_in)
+        card_layout.addLayout(hdr)
 
-        layout.addWidget(self.plot)
+        self.vb = TelemetryViewBox()
+        self.vb.sig_panned.connect(self.pan_by)
+        self.vb.sig_clicked.connect(self._on_vb_clicked)
+        self.plot = TelemetryPlotWidget(viewBox=self.vb, background=c.BG_CARD)
+        self.plot.setAntialiasing(False)
+
+        # §7.4 — axis titles outside the plot area, no legend anywhere.
+        label_style = {"color": c.TEXT_DIM, "font-size": "8pt"}
+        self.plot.setLabel("bottom", "Time (s)", **label_style)
+        self.plot.setLabel("left", self.spec.axis_title(), **label_style)
+        self.plot.getAxis("left").setWidth(64)
+        self.plot.getAxis("bottom").setHeight(36)
+        for side in ("left", "bottom"):
+            ax = self.plot.getAxis(side)
+            ax.enableAutoSIPrefix(False)
+            ax.setPen(pg.mkPen(c.BORDER))
+            ax.setTextPen(pg.mkPen(c.TEXT_DIM))
+            ax.setStyle(tickFont=QFont("monospace", 8))
+
+        self.plot.showGrid(x=True, y=True, alpha=0.10)
+
+        for name, colour in self._traces:
+            qc = QColor(colour)
+            pen = pg.mkPen(qc, width=2)
+            self._curves[name] = self.plot.plot([], [], pen=pen)
+
+            if self._multi:
+                lbl = pg.TextItem(name, color=colour, anchor=(0, 0.5))
+                lbl.setFont(QFont("monospace", 8))
+                self.plot.addItem(lbl)
+                self._labels[name] = lbl
+
+        card_layout.addWidget(self.plot)
+        layout.addWidget(self.card)
+
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
-        # §20 — 230 px floor: left-axis (64) + bottom-axis (38) +
-        # selection padding (10) already consume 112 px, leaving 118 px of
-        # actual plot area. That is enough for axis titles to clear tick
-        # labels and the trace (§7.4) and avoids the §13.1 layout
-        # collision that occurs at the old 160 px minimum.
         self.setMinimumHeight(230)
-        # Needed for the trackpad pinch gesture on macOS/Windows; the
-        # gesture arrives as a QNativeGestureEvent, not a wheel event.
         self.grabGesture(Qt.GestureType.PinchGesture)
 
     # ── §7.1 selection ───────────────────────────────────────────────────
@@ -333,14 +394,13 @@ class TelemetryGraph(QWidget):
         super().paintEvent(ev)
         if not self._selected:
             return
-        # §7.1 — a thin outline along the plot border, drawn outside the
-        # plot area and inside the widget's padding, so it cannot overlap
-        # axis labels or the plot line.
         c = ThemeManager.C()
         p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(QPen(QColor(c.CYAN), self.SELECT_BORDER_PX))
-        inset = self.SELECT_BORDER_PX // 2
-        p.drawRect(self.rect().adjusted(inset, inset, -inset - 1, -inset - 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        inset = self.SELECT_BORDER_PX // 2 + 1
+        p.drawRoundedRect(self.rect().adjusted(inset, inset, -inset - 1, -inset - 1), 8, 8)
         p.end()
 
     # ── §7.2 zoom ────────────────────────────────────────────────────────
@@ -544,6 +604,26 @@ class TelemetryGraph(QWidget):
             self._x_span = self._view_x_max - self._view_x_min
         self._dirty = True
 
+        if hasattr(self, "lbl_value"):
+            if not self._multi:
+                if self.axis_key == "pressure":
+                    self.lbl_value.setText(f"{y:.1f} Pa")
+                elif self.axis_key == "orientation":
+                    self.lbl_value.setText(f"{y:.2f} deg/s")
+                elif self.axis_key == "altitude":
+                    self.lbl_value.setText(f"{y:.2f} m")
+                elif self.axis_key in ("velocity", "descent_rate"):
+                    self.lbl_value.setText(f"{y:.2f} m/s")
+                elif self.axis_key == "temperature":
+                    self.lbl_value.setText(f"{y:.2f} °C")
+                elif self.axis_key == "acceleration":
+                    self.lbl_value.setText(f"{y:.2f} m/s²")
+                else:
+                    unit_str = f" {self.spec.unit}" if self.spec.unit else ""
+                    self.lbl_value.setText(f"{y:.2f}{unit_str}")
+            else:
+                self.lbl_value.setText(f"{y:.2f}")
+
     def mark_annotated_outage(self, x: float, y: float, cause: str) -> None:
         """§7.5.10 — a refresh (§10.3) or source drop (§3.9) dropout is
         annotated as such rather than reconciled blindly."""
@@ -559,6 +639,8 @@ class TelemetryGraph(QWidget):
             self.plot.removeItem(item)
         self._resolved_items.clear()
         self._latest_x = 0.0
+        if hasattr(self, "lbl_value"):
+            self.lbl_value.setText("—")
         self.reset_view()
 
     # ── rendering ────────────────────────────────────────────────────────

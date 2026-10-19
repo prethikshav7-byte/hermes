@@ -26,30 +26,35 @@ FS_CAPTION: int = 8     # dim secondary labels, timestamps, unit text
 @dataclass(frozen=True)
 class Palette:
     """The full colour palette used across all widgets."""
-    # Backgrounds
-    BG:            str = "#0d1117"   # window / outermost layer
-    BG_CARD:       str = "#161b22"   # card / panel backgrounds
-    BG_CARD_HOVER: str = "#1f2937"   # card hover / highlight
-    BG_PANEL:      str = "#13181f"   # pinned strip backgrounds (health bar)
-    BG_INPUT:      str = "#21262d"   # input fields, button backgrounds
+    # Backgrounds - deep aerospace navy and near-black surfaces
+    BG:            str = "#080c14"   # window / outermost layer
+    BG_CARD:       str = "#0d1420"   # card / panel backgrounds
+    BG_CARD_HOVER: str = "#131f30"   # card hover / highlight
+    BG_PANEL:      str = "#0a0f19"   # pinned strip backgrounds (health bar, header)
+    BG_INPUT:      str = "#111a28"   # input fields, button backgrounds
 
-    # Text
-    TEXT:      str = "#e6edf3"   # primary readable text
-    TEXT_DIM:  str = "#8b949e"   # labels, secondary text
-    TEXT_MUTED:str = "#484f58"   # disabled / placeholder text
+    # Text - crisp, high-contrast engineering hierarchy
+    TEXT:      str = "#f1f5f9"   # primary readable text
+    TEXT_DIM:  str = "#94a3b8"   # labels, secondary text
+    TEXT_MUTED:str = "#475569"   # disabled / placeholder text
 
-    # Accents
-    CYAN:   str = "#58a6ff"   # primary highlight / selection
-    GREEN:  str = "#3fb950"   # success / connected / OK
-    AMBER:  str = "#d29922"   # warning / pending
-    RED:    str = "#f85149"   # error / danger / lost
+    # Accents - MachZone brand and restrained telemetry signals
+    CYAN:   str = "#38bdf8"   # primary highlight / telemetry cyan
+    GREEN:  str = "#22c55e"   # success / connected / OK
+    AMBER:  str = "#f59e0b"   # warning / pending
+    RED:    str = "#ff3b30"   # MachZone brand red / error / danger / lost
+    ORANGE: str = "#f97316"   # MachZone aerodynamic orange
+    PURPLE: str = "#a855f7"   # telemetry acceleration purple
+    MAGENTA:str = "#f43f5e"   # telemetry gyro spin rose/magenta
+    BLUE:   str = "#3b82f6"   # telemetry pressure blue
 
     # Structural
-    BORDER: str = "#30363d"   # widget borders / grid lines
+    BORDER: str = "#1a2638"   # subtle blue-gray borders / grid lines
+    BORDER_LIGHT: str = "#24364f" # lighter borders for hover / active elements
 
     # Gauge-specific
-    GAUGE_BG:   str = "#21262d"   # dial arc background track
-    GAUGE_TICK: str = "#484f58"   # tick marks on the dial
+    GAUGE_BG:   str = "#111a28"   # dial arc background track
+    GAUGE_TICK: str = "#475569"   # tick marks on the dial
 
 
 class ThemeManager:
@@ -78,26 +83,33 @@ class ThemeManager:
         c = cls._palette
         return f"""
             QWidget {{
-                background-color: {c.BG_CARD};
+                background-color: {c.BG_PANEL};
                 border-right: 1px solid {c.BORDER};
             }}
             QPushButton {{
-                background: transparent;
-                border: none;
-                border-radius: 4px;
+                background-color: transparent;
+                border: 1px solid transparent;
+                border-radius: 6px;
                 color: {c.TEXT_DIM};
                 text-align: left;
-                padding: 8px 12px;
+                padding: 10px 14px;
+                font-family: "Segoe UI", -apple-system, Arial, sans-serif;
                 font-size: 10pt;
+                font-weight: 500;
             }}
             QPushButton:hover {{
                 background-color: {c.BG_CARD_HOVER};
                 color: {c.TEXT};
+                border-color: {c.BORDER};
             }}
             QPushButton:checked {{
-                background-color: {c.BG_INPUT};
-                color: {c.CYAN};
-                font-weight: bold;
+                background-color: #0d2238;
+                border: 1px solid #0284c7;
+                color: #38bdf8;
+                font-weight: 600;
+            }}
+            QPushButton:disabled {{
+                color: {c.TEXT_MUTED};
             }}
         """
 
@@ -107,18 +119,18 @@ class ThemeManager:
         c = cls._palette
         return f"""
             QPushButton {{
-                background-color: {c.BG_INPUT};
-                color: {c.TEXT};
+                background-color: rgba(17, 26, 40, 0.85);
+                color: {c.TEXT_DIM};
                 border: 1px solid {c.BORDER};
                 border-radius: 4px;
                 padding: 1px 4px;
                 font-family: "Segoe UI", Arial, sans-serif;
                 font-size: 11px;
                 font-weight: bold;
-                min-width: 24px;
-                max-width: 24px;
-                min-height: 22px;
-                max-height: 22px;
+                min-width: 22px;
+                max-width: 22px;
+                min-height: 20px;
+                max-height: 20px;
             }}
             QPushButton:hover {{
                 background-color: {c.BG_CARD_HOVER};
@@ -139,27 +151,39 @@ class ThemeManager:
         """Global Qt stylesheet for the entire application."""
         c = cls._palette
         return f"""
-            QMainWindow, QWidget {{
+            QMainWindow {{
                 background-color: {c.BG};
                 color: {c.TEXT};
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-family: "Segoe UI", -apple-system, Arial, sans-serif;
                 font-size: 10pt;
             }}
 
-            QScrollArea {{
+            QWidget {{
+                color: {c.TEXT};
+                font-family: "Segoe UI", -apple-system, Arial, sans-serif;
+                font-size: 10pt;
+            }}
+
+            QScrollArea, QStackedWidget {{
                 border: none;
-                background-color: {c.BG};
+                background-color: transparent;
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background-color: transparent;
             }}
 
             QScrollBar:vertical {{
                 background: {c.BG};
-                width: 8px;
+                width: 6px;
                 margin: 0;
             }}
             QScrollBar::handle:vertical {{
                 background: {c.BORDER};
-                border-radius: 4px;
+                border-radius: 3px;
                 min-height: 24px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {c.BORDER_LIGHT};
             }}
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical {{
@@ -168,17 +192,29 @@ class ThemeManager:
 
             QScrollBar:horizontal {{
                 background: {c.BG};
-                height: 8px;
+                height: 6px;
                 margin: 0;
             }}
             QScrollBar::handle:horizontal {{
                 background: {c.BORDER};
-                border-radius: 4px;
+                border-radius: 3px;
                 min-width: 24px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {c.BORDER_LIGHT};
             }}
             QScrollBar::add-line:horizontal,
             QScrollBar::sub-line:horizontal {{
                 width: 0;
+            }}
+
+            QFrame#TelemetryCard {{
+                background-color: {c.BG_CARD};
+                border: 1px solid {c.BORDER};
+                border-radius: 8px;
+            }}
+            QFrame#TelemetryCard:hover {{
+                border-color: {c.BORDER_LIGHT};
             }}
 
             QTabWidget::pane {{
@@ -211,6 +247,7 @@ class ThemeManager:
             }}
             QPushButton:hover {{
                 background-color: {c.BG_CARD_HOVER};
+                border-color: {c.BORDER_LIGHT};
             }}
             QPushButton:pressed {{
                 background-color: {c.BG_CARD};
@@ -284,9 +321,10 @@ class ThemeManager:
             }}
 
             QStatusBar {{
-                background-color: {c.BG_CARD};
+                background-color: {c.BG_PANEL};
                 color: {c.TEXT_DIM};
                 border-top: 1px solid {c.BORDER};
+                font-size: 9pt;
             }}
 
             QMenuBar {{
