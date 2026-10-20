@@ -527,8 +527,8 @@ class PacketInspector(QWidget):
             ("Accelerometer",          accel_str,                                    "m/s² corrected"),
             ("Gyro Spin Rate",         spin_str,                                     "deg/s spin rate"),
             ("Flight Software State",  state_str,                                    "0..7 flight state"),
-            ("Velocity",               vel_str,                                      "m/s velocity"),
             ("Vehicle",                vehicle_str,                                  "1-ROCKET, 2-CANSAT"),
+            ("Velocity",               vel_str,                                      "m/s velocity"),
             ("Checksum",               record.checksum,                              "Fixed format checksum"),
         ]
 

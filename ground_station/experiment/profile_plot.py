@@ -37,6 +37,25 @@ from ..theme import ThemeManager
 from .parser import ExperimentDataset, split_on_time_gaps
 
 
+class NonNegativeAxisItem(pg.AxisItem):
+    """AxisItem that guarantees non-negative tick display and clean numbers (§8, §11)."""
+
+    def tickStrings(self, values, scale, spacing):
+        strings = []
+        for val in values:
+            if val <= 0 or abs(val) < 1e-6:
+                strings.append("0")
+            elif val >= 10000:
+                strings.append(f"{val:.0f}")
+            elif val.is_integer():
+                strings.append(f"{int(val)}")
+            elif spacing < 1.0:
+                strings.append(f"{val:.1f}".rstrip("0").rstrip("."))
+            else:
+                strings.append(f"{val:.0f}")
+        return strings
+
+
 class ProfileViewBox(pg.ViewBox):
     """§11.10 — pinch zooms both axes together; mouse drag pans; scroll never zooms."""
 
@@ -45,6 +64,8 @@ class ProfileViewBox(pg.ViewBox):
         self.selected = False
         self.setMouseEnabled(x=False, y=False)
         self.setMenuEnabled(False)
+        self.disableAutoRange()
+        self.setLimits(xMin=0.0, yMin=0.0)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._dragging = False
 
@@ -73,6 +94,14 @@ class ProfileViewBox(pg.ViewBox):
 
 class ProfilePlotWidget(pg.PlotWidget):
     """PlotWidget that passes wheel events to the parent dashboard scroll container."""
+
+    def __init__(self, *args, **kwargs):
+        if "axisItems" not in kwargs:
+            kwargs["axisItems"] = {
+                "left": NonNegativeAxisItem(orientation="left"),
+                "bottom": NonNegativeAxisItem(orientation="bottom"),
+            }
+        super().__init__(*args, **kwargs)
 
     def wheelEvent(self, ev):
         ev.ignore()
@@ -125,8 +154,10 @@ class AerosolProfilePlot(QWidget):
         self._descent_label = pg.TextItem("descent", color=c.AMBER, anchor=(0, 0))
         self._ascent_label.setFont(QFont("monospace", 8))
         self._descent_label.setFont(QFont("monospace", 8))
-        self.plot.addItem(self._ascent_label)
-        self.plot.addItem(self._descent_label)
+        self._ascent_label.setVisible(False)
+        self._descent_label.setVisible(False)
+        self.plot.addItem(self._ascent_label, ignoreBounds=True)
+        self.plot.addItem(self._descent_label, ignoreBounds=True)
 
         # Graph control toolbar (Reset, Zoom Out, Zoom In)
         tb = QHBoxLayout()
@@ -162,6 +193,7 @@ class AerosolProfilePlot(QWidget):
         lay.addWidget(self.plot)
         self.grabGesture(Qt.GestureType.PinchGesture)
         self._apply_axis_titles()
+        self._autoscale()
 
     # ── configuration ────────────────────────────────────────────────────
 
@@ -202,6 +234,9 @@ class AerosolProfilePlot(QWidget):
         if ds is None or ds.empty:
             self._ascent.setData([], [])
             self._descent.setData([], [])
+            self._ascent_label.setVisible(False)
+            self._descent_label.setVisible(False)
+            self._autoscale()
             return
 
         ascent_r, descent_r = ds.split_at_peak()
@@ -216,12 +251,13 @@ class AerosolProfilePlot(QWidget):
         if not visible or len(rows) == 0:
             curve.setData([], [])
             label.setText("")
+            label.setVisible(False)
             return
 
         idx = list(rows)
         times = [ds.mission_time[i] for i in idx]
-        alts = [ds.altitude[i] for i in idx]
-        aero = [ds.aerosol[i] for i in idx]
+        alts = [max(0.0, ds.altitude[i]) for i in idx]
+        aero = [max(0.0, ds.aerosol[i]) for i in idx]
 
         # §11.10 — break the line at a time gap. No interpolation, and
         # never a ballistic reconstruction: an estimated aerosol
@@ -239,27 +275,33 @@ class AerosolProfilePlot(QWidget):
         label.setText(name)
         if anchor and anchor[0] == anchor[0] and anchor[1] == anchor[1]:
             label.setPos(*anchor)
+            label.setVisible(True)
+        else:
+            label.setVisible(False)
 
     def _autoscale(self) -> None:
         ds = self.dataset
         if ds is None or ds.empty:
-            return
-        alt_lo, alt_hi = min(ds.altitude), max(ds.altitude)
-        # §8 — aerosol has a hard 0 floor; negative concentration is
-        # unphysical, so the axis never shows below zero even if a
-        # flagged negative sample is present in the data.
-        aero_lo = 0.0
-        aero_hi = max(max(ds.aerosol), 10.0)
+            alt_lo, alt_hi = 0.0, 1000.0
+            aero_lo, aero_hi = 0.0, 100.0
+        else:
+            alt_lo = max(0.0, float(min(ds.altitude)))
+            alt_hi = max(float(max(ds.altitude)), self.MIN_ALTITUDE_SPAN_M)
+            # §8 — aerosol has a hard 0 floor; negative concentration is
+            # unphysical, so the axis never shows below zero even if a
+            # flagged negative sample is present in the data.
+            aero_lo = 0.0
+            aero_hi = max(float(max(ds.aerosol)), 10.0)
 
-        if alt_hi - alt_lo < self.MIN_ALTITUDE_SPAN_M:
-            mid = 0.5 * (alt_lo + alt_hi)
-            alt_lo = mid - self.MIN_ALTITUDE_SPAN_M / 2
-            alt_hi = mid + self.MIN_ALTITUDE_SPAN_M / 2
+            if alt_hi - alt_lo < self.MIN_ALTITUDE_SPAN_M:
+                alt_hi = alt_lo + self.MIN_ALTITUDE_SPAN_M
 
         if self._swapped:
+            self.vb.setLimits(xMin=0.0, yMin=0.0, minXRange=1.0, minYRange=self.MIN_ALTITUDE_SPAN_M)
             self.vb.setXRange(aero_lo, aero_hi * 1.05, padding=0)
             self.vb.setYRange(alt_lo, alt_hi, padding=0.02)
         else:
+            self.vb.setLimits(xMin=0.0, yMin=0.0, minXRange=self.MIN_ALTITUDE_SPAN_M, minYRange=1.0)
             self.vb.setXRange(alt_lo, alt_hi, padding=0.02)
             self.vb.setYRange(aero_lo, aero_hi * 1.05, padding=0)
 
@@ -310,6 +352,7 @@ class SecondaryPlot(QWidget):
     def __init__(self, which: str, parent=None):
         super().__init__(parent)
         self.which = which          # "altitude" | "aerosol"
+        self.dataset: Optional[ExperimentDataset] = None
         c = ThemeManager.C()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -326,7 +369,11 @@ class SecondaryPlot(QWidget):
             else "Aerosol Count (particles/cm³)", **style)
         self.plot.getAxis("left").setWidth(74)
         for side in ("left", "bottom"):
-            self.plot.getAxis(side).enableAutoSIPrefix(False)
+            ax = self.plot.getAxis(side)
+            ax.enableAutoSIPrefix(False)
+            ax.setPen(pg.mkPen(c.BORDER))
+            ax.setTextPen(pg.mkPen(c.TEXT_DIM))
+            ax.setStyle(tickFont=QFont("monospace", 8))
 
         colour = c.GREEN if which == "altitude" else c.CYAN
         self._curve = self.plot.plot([], [], pen=pg.mkPen(QColor(colour), width=2),
@@ -364,6 +411,7 @@ class SecondaryPlot(QWidget):
         lay.addLayout(tb)
 
         lay.addWidget(self.plot)
+        self._autoscale()
 
     def zoom_in(self, factor: Optional[float] = None) -> None:
         """Zoom in on secondary plot."""
@@ -377,12 +425,37 @@ class SecondaryPlot(QWidget):
 
     def reset_view(self) -> None:
         """Reset view to auto-fit."""
-        self.vb.autoRange()
+        self._autoscale()
+
+    def _autoscale(self) -> None:
+        ds = self.dataset
+        if ds is None or ds.empty:
+            x_lo, x_hi = 0.0, 100.0
+            y_lo = 0.0
+            y_hi = 1000.0 if self.which == "altitude" else 100.0
+        else:
+            x_lo = max(0.0, float(min(ds.mission_time)))
+            x_hi = max(float(max(ds.mission_time)), 5.0)
+            ys = ds.altitude if self.which == "altitude" else ds.aerosol
+            valid_ys = [float(max(0.0, y)) for y in ys if y is not None and y == y]
+            y_lo = 0.0
+            if valid_ys:
+                y_hi = max(max(valid_ys), 10.0 if self.which == "aerosol" else 100.0)
+            else:
+                y_hi = 100.0 if self.which == "aerosol" else 1000.0
+
+        self.vb.setLimits(xMin=0.0, yMin=0.0, minXRange=2.0, minYRange=1.0)
+        self.vb.setXRange(x_lo, x_hi, padding=0.02)
+        self.vb.setYRange(y_lo, y_hi * 1.05, padding=0)
 
     def set_dataset(self, ds: Optional[ExperimentDataset]) -> None:
+        self.dataset = ds
         if ds is None or ds.empty:
             self._curve.setData([], [])
+            self._autoscale()
             return
-        ys = ds.altitude if self.which == "altitude" else ds.aerosol
-        xs, ys = split_on_time_gaps(ds.mission_time, ys, ds.mission_time)
+        ys = [max(0.0, y) for y in (ds.altitude if self.which == "altitude" else ds.aerosol)]
+        times = [max(0.0, t) for t in ds.mission_time]
+        xs, ys = split_on_time_gaps(times, ys, times)
         self._curve.setData(xs, ys)
+        self._autoscale()

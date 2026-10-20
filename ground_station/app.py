@@ -83,6 +83,18 @@ class MachZoneHeader(QWidget):
         brand_row = QHBoxLayout()
         brand_row.setSpacing(10)
 
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "machzone_logo.png"
+        )
+        if os.path.exists(logo_path):
+            logo_lbl = QLabel()
+            pm = QPixmap(logo_path).scaled(
+                34, 34, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_lbl.setPixmap(pm)
+            brand_row.addWidget(logo_lbl)
+
         # Title: MACHZONE
         title = QLabel("MACHZONE")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Black))
@@ -186,12 +198,18 @@ class MachZoneHeader(QWidget):
 
 
 class SidebarFooter(QWidget):
-    """Bottom slogan badge."""
+    """Bottom slogan badge with subtle aerospace accent."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(76)
         c = ThemeManager.C()
+        self._logo_pixmap: Optional[QPixmap] = None
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "machzone_logo.png"
+        )
+        if os.path.exists(logo_path):
+            self._logo_pixmap = QPixmap(logo_path)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(16, 12, 16, 16)
@@ -222,19 +240,57 @@ class SidebarFooter(QWidget):
 
     def paintEvent(self, ev) -> None:
         super().paintEvent(ev)
+        if self._logo_pixmap and not self._logo_pixmap.isNull():
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            p.setOpacity(0.04)
+            size = 46
+            scaled = self._logo_pixmap.scaled(
+                size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            p.drawPixmap(self.width() - size - 12, (self.height() - size) // 2, scaled)
+            p.end()
 
 
 class MainDashboardArea(QWidget):
-    """Main dashboard content container."""
+    """Main dashboard content container with subtle MachZone aerospace watermark."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._logo_pixmap: Optional[QPixmap] = None
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "machzone_logo.png"
+        )
+        if os.path.exists(logo_path):
+            self._logo_pixmap = QPixmap(logo_path)
 
     def paintEvent(self, ev) -> None:
         p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         c = ThemeManager.C()
+
         # Solid base background
         p.fillRect(self.rect(), QColor(c.BG))
+
+        # MachZone watermark in background
+        if self._logo_pixmap and not self._logo_pixmap.isNull():
+            w = self.width()
+            h = self.height()
+            target_dim = int(min(w * 0.48, h * 0.72, 580))
+            if target_dim > 80:
+                scaled_logo = self._logo_pixmap.scaled(
+                    target_dim, target_dim,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                lx = int((w - scaled_logo.width()) / 2)
+                ly = int((h - scaled_logo.height()) / 2 + 12)
+                p.setOpacity(0.085)
+                p.drawPixmap(lx, ly, scaled_logo)
+                p.setOpacity(1.0)
+
         p.end()
 
 
@@ -260,7 +316,8 @@ class GroundStationApp(QMainWindow):
             page.backward_transition.connect(self._on_notice)
 
         self.command_centre = CommandCentre(
-            transmit=lambda target, command, seq: None)
+            transmit=lambda target, command, seq: None,
+            ack_timeout=18.0)
         self.command_page = CommandPage(self.command_centre, simulator_mode)
         self.command_page.notice.connect(self._on_notice)
         self.experiment_page = ExperimentPage()
@@ -335,14 +392,29 @@ class GroundStationApp(QMainWindow):
         bar.setStyleSheet(ThemeManager.sidebar_stylesheet())
 
         lay = QVBoxLayout(bar)
-        lay.setContentsMargins(0, 8, 0, 8)
+        lay.setContentsMargins(0, 14, 0, 8)
         lay.setSpacing(4)
+
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "machzone_logo.png"
+        )
+        if os.path.exists(logo_path):
+            logo_box = QHBoxLayout()
+            logo_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            logo_lbl = QLabel()
+            pm = QPixmap(logo_path).scaled(
+                46, 46, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_lbl.setPixmap(pm)
+            logo_box.addWidget(logo_lbl)
+            lay.addLayout(logo_box)
 
         if mode_label:
             badge = QLabel(f"  {mode_label}")
             badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            badge.setStyleSheet(f"color: {c.GREEN}; padding: 14px 12px 10px; letter-spacing: 1.5px;")
+            badge.setStyleSheet(f"color: {c.GREEN}; padding: 10px 12px 10px; letter-spacing: 1.5px;")
             lay.addWidget(badge)
 
         self._nav: List[NavButton] = []
@@ -384,6 +456,12 @@ class GroundStationApp(QMainWindow):
         supervisor.vehicle_state_changed.connect(self._on_vehicle_state)
         supervisor.line_rejected.connect(self._on_rejected)
         supervisor.notice.connect(self._on_notice)
+        if hasattr(supervisor, "command_reply"):
+            supervisor.command_reply.connect(self.command_page.handle_command_reply)
+        if hasattr(supervisor, "ground_cmd"):
+            supervisor.ground_cmd.connect(self.command_page.handle_ground_cmd)
+        if hasattr(supervisor, "servo_report"):
+            supervisor.servo_report.connect(self.command_page.handle_servo_report)
         self._supervisor = supervisor
         self.com_page.set_supervisor(supervisor)
         self.header.update_supervisor_info(supervisor)

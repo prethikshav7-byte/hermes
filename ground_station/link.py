@@ -49,7 +49,7 @@ from typing import Deque, Dict, List, Optional, Tuple
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
 from .codec import CsvCodec, PacketCodec, frame_command
-from .commands import BENCH_COMMANDS
+from .commands import BENCH_COMMANDS, to_firmware_command
 from .models import (
     HEARTBEAT_TIMEOUT_S, NO_DATA_AFTER_S, ReceiverState, SourceState,
     TelemetryPacket, VehicleID, VehicleLinkState,
@@ -174,6 +174,7 @@ class SerialSource(QThread):
         self._queue: Deque[Tuple[str, float]] = deque(maxlen=self.QUEUE_MAX)
         self._dropped = 0
         self._last_line_at = 0.0
+        self._rx_buf = bytearray()
 
         #: Outgoing lines, written from the reader thread so the UI never
         #: touches the port. Small — commands are operator-initiated and
@@ -264,6 +265,7 @@ class SerialSource(QThread):
         except Exception:
             pass
 
+        self._rx_buf.clear()
         self._last_line_at = time.monotonic()
         self._set_state(SourceState.CONNECTED)
         self.source_event.emit(f"Connected to {device} at {self.baudrate} baud")
@@ -276,16 +278,23 @@ class SerialSource(QThread):
             if self._tx_wrote:
                 self._ser.flush()
 
-            raw = self._ser.readline()
+            # Read any available bytes into rx buffer
+            waiting = getattr(self._ser, "in_waiting", 0)
+            chunk = self._ser.read(waiting if waiting > 0 else 1)
             now = time.monotonic()
 
-            if raw:
-                text = raw.decode("utf-8", errors="ignore").strip()
-                if text:
-                    self._last_line_at = now
-                    if self._state is not SourceState.CONNECTED:
-                        self._set_state(SourceState.CONNECTED)
-                    self._enqueue(text, now)
+            if chunk:
+                self._rx_buf.extend(chunk)
+                while b"\n" in self._rx_buf:
+                    line_bytes, _, self._rx_buf = self._rx_buf.partition(b"\n")
+                    text = line_bytes.decode("utf-8", errors="ignore").strip()
+                    if text:
+                        self._last_line_at = now
+                        if self._state is not SourceState.CONNECTED:
+                            self._set_state(SourceState.CONNECTED)
+                        self._enqueue(text, now)
+                if len(self._rx_buf) > 1024:
+                    self._rx_buf.clear()
             else:
                 # §3.6 — port open but silent. Distinct from a vehicle
                 # being silent: this means nothing at all is arriving,
@@ -361,6 +370,9 @@ class LinkSupervisor(QObject):
     source_state_changed = pyqtSignal(object)    # SourceState
     receiver_state_changed = pyqtSignal(object)  # ReceiverState
     vehicle_state_changed = pyqtSignal(object, object)  # VehicleID, VehicleLinkState
+    command_reply = pyqtSignal(str, str, dict, str) # cmd, status, details, raw_line
+    ground_cmd = pyqtSignal(int, str, str, str) # id, status, info, raw_line
+    servo_report = pyqtSignal(int, float, float, float, int, int, str) # ch, deg, est, rem, mode, step, raw
     notice = pyqtSignal(str)
 
     #: §13.3 — drain and render at a fixed rate rather than per packet.
@@ -370,6 +382,9 @@ class LinkSupervisor(QObject):
                  thresholds: Optional[LossThresholds] = None, parent=None):
         super().__init__(parent)
         self.demux = TelemetryDemux(codec or CsvCodec(), thresholds)
+        self.demux.on_command_ack = lambda cmd, st, det, raw: self.command_reply.emit(cmd, st, det, raw)
+        self.demux.on_ground_cmd = lambda cmd_id, st, info, raw: self.ground_cmd.emit(cmd_id, st, info, raw)
+        self.demux.on_servo_report = lambda ch, deg, est, rem, mode, step, raw: self.servo_report.emit(ch, deg, est, rem, mode, step, raw)
         self.source: Optional[SerialSource] = None
 
         self._receiver_state = ReceiverState.NO_HEARTBEAT
@@ -388,10 +403,16 @@ class LinkSupervisor(QObject):
                    device_hint: Optional[str] = None) -> None:
         self.disconnect_source()
         self.source = SerialSource(stable_id, baudrate, device_hint)
-        self.source.state_changed.connect(self.source_state_changed)
+        self.source.state_changed.connect(self._on_source_state)
         self.source.source_event.connect(self.notice)
         self.source.start()
         self._timer.start()
+
+    def _on_source_state(self, state: SourceState) -> None:
+        self.source_state_changed.emit(state)
+        if state is SourceState.CONNECTED and self.source is not None:
+            # Ground Teensy 4.1 boots with LoRa disabled in reset: auto-enable radio upon connect
+            self.source.send_line("0,ENABLE\n")
 
     def disconnect_source(self) -> None:
         self._timer.stop()
@@ -403,29 +424,16 @@ class LinkSupervisor(QObject):
 
     def send_command(self, target: VehicleID, command: str,
                      sequence: Optional[int] = None) -> int:
-        """Frame and queue one operator-initiated command (§1.4).
-
-        `sequence` is supplied by CommandCentre, which owns the §10.7
-        acknowledgment lifecycle. It must be the same number that appears
-        on the wire — a second counter here would produce sequence
-        numbers the ack matcher has never heard of, and every command
-        would sit unacknowledged forever while the vehicle was in fact
-        replying correctly. The local counter is only a fallback for
-        callers that do not track acks.
-
-        Never called automatically by anything in this module.
-        """
+        """Frame and queue one operator-initiated command (§1.4)."""
         if sequence is None:
             self._command_sequence += 1
             sequence = self._command_sequence
+
+        hw_cmd = to_firmware_command(command)
+
         if self.source is not None:
-            if command in BENCH_COMMANDS or command in (
-                "TEST1", "TEST2", "TEST3", "TEST4", "TEST5", "NEXT", "TEST6", "RESET", "START", "CONFIRM"
-            ):
-                self.source.send_line(command + "\n")
-            else:
-                self.source.send_line(
-                    frame_command(target, command, sequence) + "\n")
+            # Format expected by Ground Teensy 4.1: <id>,<CMD>[,args]\n
+            self.source.send_line(f"{sequence},{hw_cmd}\n")
         return sequence
 
     # ── drain loop ───────────────────────────────────────────────────────

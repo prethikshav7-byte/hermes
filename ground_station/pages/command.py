@@ -182,14 +182,16 @@ class ActuatorPanel(QWidget):
         self._lock_btn = QPushButton("Lock")
         self._lock_btn.setFont(QFont("monospace", 8, QFont.Weight.Bold))
         self._lock_btn.setStyleSheet(_btn_css(c.AMBER))
-        self._lock_btn.setToolTip(f"Lock {self.spec.mechanism.lower()} (0° safe position)")
+        lock_angles = {"ACT_DOOR": 50, "ACT_DEPLOY": 80, "ACT_SEPARATE": 80}
+        lock_deg = lock_angles.get(self.spec.id, 50)
+        self._lock_btn.setToolTip(f"Lock {self.spec.mechanism.lower()} ({lock_deg}° safe position)")
         self._lock_btn.clicked.connect(self._on_lock_clicked)
         row.addWidget(self._lock_btn)
 
         self._unlock_btn = QPushButton("Unlock")
         self._unlock_btn.setFont(QFont("monospace", 8, QFont.Weight.Bold))
         self._unlock_btn.setStyleSheet(_btn_css(c.CYAN))
-        self._unlock_btn.setToolTip(f"Unlock {self.spec.mechanism.lower()} (not in current firmware protocol)")
+        self._unlock_btn.setToolTip(f"Unlock {self.spec.mechanism.lower()} (0° safe position)")
         self._unlock_btn.clicked.connect(self._on_unlock_clicked)
         row.addWidget(self._unlock_btn)
 
@@ -240,15 +242,21 @@ class ActuatorPanel(QWidget):
 
     def _on_lock_clicked(self) -> None:
         self.actuator.locked = True
-        self.actuator.note_commanded(0.0)
+        lock_angles = {"ACT_DOOR": 50.0, "ACT_DEPLOY": 80.0, "ACT_SEPARATE": 80.0}
+        angle = lock_angles.get(self.spec.id, 0.0)
+        self.actuator.note_commanded(angle)
         cmd_map = {"ACT_DOOR": "LOCK:DOOR", "ACT_DEPLOY": "LOCK:CANSAT", "ACT_SEPARATE": "LOCK:SEPARATION"}
-        cmd = cmd_map.get(self.spec.id, "LOCK:DOOR")
+        cmd = cmd_map.get(self.spec.id, f"LOCK,{self.spec.channel}")
         self.set_last_command(cmd)
         self.lock_requested.emit(self.spec.id)
 
     def _on_unlock_clicked(self) -> None:
         self.actuator.locked = False
-        self._note.setText("Unlock requested: No UNLOCK command in current firmware protocol.")
+        self.actuator.note_commanded(0.0)
+        cmd_map = {"ACT_DOOR": "UNLOCK:DOOR", "ACT_DEPLOY": "UNLOCK:CANSAT", "ACT_SEPARATE": "UNLOCK:SEPARATION"}
+        cmd = cmd_map.get(self.spec.id, f"UNLOCK,{self.spec.channel}")
+        self.set_last_command(cmd)
+        self._note.setText("Unlocked to 0° safe position.")
         self.unlock_requested.emit(self.spec.id)
         self.refresh()
 
@@ -264,7 +272,7 @@ class ActuatorPanel(QWidget):
         cmd_prefix = {"ACT_DOOR": "DOOR", "ACT_DEPLOY": "CANSAT", "ACT_SEPARATE": "SEPARATION"}.get(self.spec.id, "DOOR")
         if self.actuator.commanded is not None and int(self.actuator.commanded) in (30, 60, 90):
             cmd = f"{cmd_prefix}:{int(self.actuator.commanded)}"
-        elif self._last_command_sent and ":" in self._last_command_sent and not self._last_command_sent.startswith("LOCK:"):
+        elif self._last_command_sent and ":" in self._last_command_sent:
             cmd = self._last_command_sent
         else:
             cmd_map = {"ACT_DOOR": "TEST1", "ACT_DEPLOY": "TEST2", "ACT_SEPARATE": "TEST3"}
@@ -293,14 +301,24 @@ class ActuatorPanel(QWidget):
         self._commanded.setText(
             "—" if a.commanded is None else f"{a.commanded:.0f}°" if a.commanded.is_integer() else f"{a.commanded:.1f}°")
         # §10.1 — "Never display commanded position as if it were actual."
-        # An em dash here means the vehicle has not reported a position,
-        # which is a different fact from being at 180°.
-        self._actual.setText(
-            "not reported" if a.position is None else f"{a.position:.0f}°" if a.position.is_integer() else f"{a.position:.1f}°")
+        # An em dash here means the vehicle has not reported a position.
+        # Preserve distinction between actual measurement, firmware estimate, and not reported.
+        if a.position is None:
+            self._actual.setText("not reported")
+        else:
+            deg_val = f"{a.position:.0f}°" if a.position.is_integer() else f"{a.position:.1f}°"
+            if getattr(a, "is_estimate", False):
+                self._actual.setText(f"{deg_val} (est)")
+            else:
+                self._actual.setText(deg_val)
 
-        down, up = a.remaining_travel
-        self._travel.setText(
-            "—" if down is None else f"{down:.0f}° down   {up:.0f}° up")
+        rem = getattr(a, "remaining_deg", None)
+        if rem is not None:
+            self._travel.setText(f"{rem:.0f}° to target" if rem > 0 else "0° (at target)")
+        else:
+            down, up = a.remaining_travel
+            self._travel.setText(
+                "—" if down is None else f"{down:.0f}° down   {up:.0f}° up")
         if self._last_command_sent:
             self._last.setText(self._last_command_sent)
         elif a.last_command_at is not None:
@@ -479,45 +497,46 @@ class SequenceControlPanel(QWidget):
         self.command_requested.emit(command)
 
     def _on_lock_all_clicked(self) -> None:
-        self.command_requested.emit("LOCK:ALL")
+        self.command_requested.emit("LOCKALL")
 
     def _on_reset_clicked(self) -> None:
-        self.command_requested.emit("RESET")
+        self.command_requested.emit("SEQRST")
 
     def _on_manual_seq_clicked(self) -> None:
-        self.command_requested.emit("TEST5")
+        self.command_requested.emit("MSEQ")
 
     def _on_next_step_clicked(self) -> None:
-        self.command_requested.emit("NEXT")
+        self.command_requested.emit("NSTEP")
 
     def _on_full_seq_clicked(self) -> None:
-        self.command_requested.emit("TEST6")
+        self.command_requested.emit("FSEQ")
 
     def note_command_sent(self, command: str) -> None:
         self._last_cmd = command
-        if command == "TEST1":
+        cmd_u = command.upper()
+        if cmd_u in ("TEST1",):
             self._mode = "INDIVIDUAL TEST"
             self._step_text = "Door Test"
             self._status = "Sent: TEST1 (Door Test)"
-        elif command == "TEST2":
+        elif cmd_u in ("TEST2",):
             self._mode = "INDIVIDUAL TEST"
             self._step_text = "CanSat Test"
             self._status = "Sent: TEST2 (CanSat Test)"
-        elif command == "TEST3":
+        elif cmd_u in ("TEST3",):
             self._mode = "INDIVIDUAL TEST"
             self._step_text = "Separation Test"
             self._status = "Sent: TEST3 (Separation Test)"
-        elif command in ("LOCK:ALL", "TEST4"):
+        elif cmd_u in ("LOCKALL", "LOCK:ALL", "TEST4"):
             self._mode = "LOCKED"
             self._step = 0
             self._step_text = "0 / 3 (All Locked)"
-            self._status = "Sent: LOCK:ALL (Lock All)"
-        elif command == "TEST5":
+            self._status = "Sent: LOCKALL (Lock All)"
+        elif cmd_u in ("MSEQ", "TEST5"):
             self._mode = "MANUAL"
             self._step = 1
             self._step_text = "1 / 3 (Step 1: Door)"
-            self._status = "Sent: TEST5 (Manual Step 1: Door)"
-        elif command == "NEXT":
+            self._status = "Sent: MSEQ (Manual Step 1: Door)"
+        elif cmd_u in ("NSTEP", "NEXT"):
             if self._step == 1:
                 self._step = 2
                 self._step_text = "2 / 3 (Step 2: CanSat)"
@@ -529,17 +548,17 @@ class SequenceControlPanel(QWidget):
             else:
                 self._step = 1
                 self._step_text = "1 / 3 (Step 1: Door)"
-            self._status = f"Sent: NEXT ({self._step_text})"
-        elif command == "TEST6":
+            self._status = f"Sent: NSTEP ({self._step_text})"
+        elif cmd_u in ("FSEQ", "TEST6"):
             self._mode = "FULL SEQUENCE"
             self._step = 3
             self._step_text = "3 / 3 (Full Auto Run)"
-            self._status = "Sent: TEST6 (Full Sequence)"
-        elif command == "RESET":
+            self._status = "Sent: FSEQ (Full Sequence)"
+        elif cmd_u in ("SEQRST", "RESET"):
             self._mode = "RESET / IDLE"
             self._step = 0
             self._step_text = "0 / 3 (Safe / Reset)"
-            self._status = "Sent: RESET (System Reset)"
+            self._status = "Sent: SEQRST (Sequence Reset)"
         self.refresh()
 
     def set_enabled(self, enabled: bool) -> None:
@@ -716,11 +735,11 @@ class CommandLogPanel(QWidget):
             CommandStatus.TIMED_OUT: c.RED,
             CommandStatus.REJECTED: c.RED,
         }.get(record.status, c.TEXT_DIM)
-        w._status.setText("SENT" if record.command in BENCH_COMMANDS else record.status.value)
+        w._status.setText(record.status.value)
         w._status.setStyleSheet(f"color: {colour};")
         # §10.7 — retry is operator-initiated only. The button is the only
         # path to a resend; nothing in this file calls resend() on a timer.
-        w._resend.setVisible(record.unacknowledged and record.command not in BENCH_COMMANDS)
+        w._resend.setVisible(record.unacknowledged)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -748,14 +767,26 @@ class CommandPage(QWidget):
             "SEPARATION:90": "Separation 90° command sent",
             "LOCK:SEPARATION": "Separation locked (0°)",
             "LOCK:ALL": "Lock All command sent",
+            "LOCKALL": "Lock All command sent",
+            "UNLOCK:DOOR": "Door unlocked (0°)",
+            "UNLOCK:CANSAT": "CanSat unlocked (0°)",
+            "UNLOCK:SEPARATION": "Separation unlocked (0°)",
             "TEST1": "Door test command sent",
             "TEST2": "CanSat test command sent",
             "TEST3": "Separation test command sent",
             "TEST4": "Lock All command sent",
             "RESET": "Reset command sent",
+            "SEQRST": "Sequence Reset command sent",
             "TEST5": "Manual sequence command sent",
+            "MSEQ": "Manual sequence command sent",
             "NEXT": "Next sequence step command sent",
+            "NSTEP": "Next sequence step command sent",
             "TEST6": "Full sequence command sent",
+            "FSEQ": "Full sequence command sent",
+            "ENABLE_TELEMETRY": "Enable telemetry command sent",
+            "DISABLE_TELEMETRY": "Disable telemetry command sent",
+            "SET_MODE_LIVE": "Live mode command sent",
+            "SET_MODE_HIBERNATE": "Hibernate command sent",
             "FREQ:ROCKET:ORIGINAL": "Rocket frequency set to Original",
             "FREQ:ROCKET:BACKUP": "Rocket frequency set to Backup",
             "FREQ:CANSAT:ORIGINAL": "CanSat frequency set to Original",
@@ -930,8 +961,8 @@ class CommandPage(QWidget):
 
         self._rocket_freq_buttons: Dict[str, QPushButton] = {}
         for i, (mode, label, freq_str) in enumerate([
-            ("ORIGINAL", "Original", "433.05 MHz"),
-            ("BACKUP", "Backup", "434.79 MHz"),
+            ("ORIGINAL", "Original", "866.50 MHz (Main)"),
+            ("BACKUP", "Backup", "865.25 MHz (Backup)"),
         ]):
             btn = QPushButton(label)
             btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
@@ -948,8 +979,8 @@ class CommandPage(QWidget):
 
         self._cansat_freq_buttons: Dict[str, QPushButton] = {}
         for i, (mode, label, freq_str) in enumerate([
-            ("ORIGINAL", "Original", "433.25 MHz"),
-            ("BACKUP", "Backup", "434.55 MHz"),
+            ("ORIGINAL", "Original", "866.50 MHz (Main)"),
+            ("BACKUP", "Backup", "865.25 MHz (Backup)"),
         ]):
             btn = QPushButton(label)
             btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
@@ -1018,16 +1049,16 @@ class CommandPage(QWidget):
             btn.setStyleSheet(self._freq_btn_css(is_active))
 
     def _set_frequency(self, vid: VehicleID, mode: str) -> None:
+        hw_cmd = "FQ,0" if mode == "ORIGINAL" else "FQ,1"
+        freq_display = "866.50 MHz (Main)" if mode == "ORIGINAL" else "865.25 MHz (Backup)"
         if vid == VehicleID.ROCKET:
             self._rocket_freq = mode
-            cmd = f"FREQ:ROCKET:{mode}"
-            self.centre.send(VehicleID.ROCKET, cmd)
-            self.notice.emit(f"Rocket frequency set to {mode.title()}")
+            self.centre.send(VehicleID.ROCKET, hw_cmd)
+            self.notice.emit(f"Rocket frequency set to {freq_display}")
         else:
             self._cansat_freq = mode
-            cmd = f"FREQ:CANSAT:{mode}"
-            self.centre.send(VehicleID.CANSAT, cmd)
-            self.notice.emit(f"CanSat frequency set to {mode.title()}")
+            self.centre.send(VehicleID.CANSAT, hw_cmd)
+            self.notice.emit(f"CanSat frequency set to {freq_display}")
         self._update_freq_styles()
 
     def _on_refresh_processor_clicked(self) -> None:
@@ -1057,10 +1088,13 @@ class CommandPage(QWidget):
             "ACT_DEPLOY": "LOCK:CANSAT",
             "ACT_SEPARATE": "LOCK:SEPARATION",
         }
+        lock_angles = {"ACT_DOOR": 50.0, "ACT_DEPLOY": 80.0, "ACT_SEPARATE": 80.0}
         cmd = cmd_map.get(actuator_id, "LOCK:DOOR")
+        angle = lock_angles.get(actuator_id, 0.0)
         panel = self.actuator_panels.get(actuator_id)
         if panel is not None:
-            panel.actuator.note_commanded(0.0)
+            panel.actuator.locked = True
+            panel.actuator.note_commanded(angle)
             panel.set_last_command(cmd)
         self.centre.send(VehicleID.ROCKET, cmd)
         msg = self._command_popup_text(cmd)
@@ -1068,13 +1102,20 @@ class CommandPage(QWidget):
         self.refresh()
 
     def _on_actuator_unlock(self, actuator_id: str) -> None:
-        name_map = {
-            "ACT_DOOR": "Rocket Door",
-            "ACT_DEPLOY": "Payload Deploy",
-            "ACT_SEPARATE": "Separation",
+        cmd_map = {
+            "ACT_DOOR": "UNLOCK:DOOR",
+            "ACT_DEPLOY": "UNLOCK:CANSAT",
+            "ACT_SEPARATE": "UNLOCK:SEPARATION",
         }
-        name = name_map.get(actuator_id, "Actuator")
-        self.notice.emit(f"{name} unlock: not in firmware protocol")
+        cmd = cmd_map.get(actuator_id, "UNLOCK:DOOR")
+        panel = self.actuator_panels.get(actuator_id)
+        if panel is not None:
+            panel.actuator.locked = False
+            panel.actuator.note_commanded(0.0)
+            panel.set_last_command(cmd)
+        self.centre.send(VehicleID.ROCKET, cmd)
+        name_map = {"ACT_DOOR": "Door", "ACT_DEPLOY": "CanSat", "ACT_SEPARATE": "Separation"}
+        self.notice.emit(f"{name_map.get(actuator_id, 'Actuator')} unlock (0°) command sent")
         self.refresh()
 
     def _send_actuator_command(self, actuator_id: str, command: str) -> None:
@@ -1089,36 +1130,48 @@ class CommandPage(QWidget):
 
     def _send_sequence_command(self, command: str) -> None:
         self.sequence_panel.note_command_sent(command)
-        if command in ("LOCK:ALL", "TEST4"):
+        cmd_u = command.upper()
+        if cmd_u in ("LOCKALL", "LOCK:ALL", "TEST4"):
+            lock_angles = {"ACT_DOOR": 50.0, "ACT_DEPLOY": 80.0, "ACT_SEPARATE": 80.0}
+            for sid, p in self.actuator_panels.items():
+                p.actuator.locked = True
+                p.actuator.note_commanded(lock_angles.get(sid, 0.0))
+                p.set_last_command("LOCKALL")
+        elif cmd_u in ("SEQRST", "RESET"):
             for p in self.actuator_panels.values():
+                p.actuator.locked = False
                 p.actuator.note_commanded(0.0)
-                p.set_last_command("LOCK:ALL")
-        elif command == "RESET":
-            for p in self.actuator_panels.values():
-                p.actuator.note_commanded(0.0)
-                p.set_last_command("RESET")
-        elif command == "TEST1":
+                p.set_last_command("SEQRST")
+        elif cmd_u in ("TEST1", "MSEQ", "TEST5"):
             p = self.actuator_panels.get("ACT_DOOR")
-            if p: p.set_last_command("TEST1")
-        elif command == "TEST2":
+            if p:
+                p.actuator.note_commanded(0.0)
+                p.set_last_command(cmd_u)
+        elif cmd_u == "TEST2":
             p = self.actuator_panels.get("ACT_DEPLOY")
-            if p: p.set_last_command("TEST2")
-        elif command == "TEST3":
+            if p:
+                p.actuator.note_commanded(0.0)
+                p.set_last_command("TEST2")
+        elif cmd_u == "TEST3":
             p = self.actuator_panels.get("ACT_SEPARATE")
-            if p: p.set_last_command("TEST3")
-        elif command == "TEST5":
-            p = self.actuator_panels.get("ACT_DOOR")
-            if p: p.set_last_command("TEST5")
-        elif command == "NEXT":
+            if p:
+                p.actuator.note_commanded(0.0)
+                p.set_last_command("TEST3")
+        elif cmd_u in ("NSTEP", "NEXT"):
             if self.sequence_panel._step == 2:
                 p = self.actuator_panels.get("ACT_DEPLOY")
-                if p: p.set_last_command("NEXT")
+                if p:
+                    p.actuator.note_commanded(0.0)
+                    p.set_last_command("NSTEP")
             elif self.sequence_panel._step >= 3:
                 p = self.actuator_panels.get("ACT_SEPARATE")
-                if p: p.set_last_command("NEXT")
-        elif command == "TEST6":
+                if p:
+                    p.actuator.note_commanded(0.0)
+                    p.set_last_command("NSTEP")
+        elif cmd_u in ("FSEQ", "TEST6"):
             for p in self.actuator_panels.values():
-                p.set_last_command("TEST6")
+                p.actuator.note_commanded(0.0)
+                p.set_last_command("FSEQ")
 
         self.centre.send(VehicleID.ROCKET, command)
         msg = self._command_popup_text(command)
@@ -1271,6 +1324,124 @@ class CommandPage(QWidget):
         # §10.7 — surface unacknowledged commands that have aged out
         # without ever auto-retrying them.
         self.centre.poll_timeouts()
+
+    def handle_ground_cmd(self, cmd_id: int, status: str, info: str, raw_line: str) -> None:
+        self.centre.handle_ground_cmd(cmd_id, status, info, raw_line)
+        status_u = status.upper()
+        if status_u == "OK":
+            self.notice.emit(f"Ground confirmation: Command {cmd_id} OK")
+        elif status_u == "REJECTED":
+            self.notice.emit(f"Ground rejected: Command {cmd_id} ({info})")
+        elif status_u == "FAILED":
+            self.notice.emit(f"Ground failed: Command {cmd_id} ({info})")
+        elif status_u == "BADCMD":
+            self.notice.emit(f"Ground syntax error: Command {cmd_id} BADCMD")
+        elif status_u == "BUSY":
+            self.notice.emit(f"Ground radio busy: Command {cmd_id} ({info})")
+        self.refresh()
+
+    def handle_servo_report(self, ch: int, deg: int, est: int, rem: int, mode: int, step: int, raw_line: str) -> None:
+        ch_to_id = {0: "ACT_DOOR", 1: "ACT_DEPLOY", 2: "ACT_SEPARATE"}
+        act_id = ch_to_id.get(ch)
+        if act_id and act_id in self.actuator_panels:
+            panel = self.actuator_panels[act_id]
+            a = panel.actuator
+            if deg >= 0:
+                a.note_commanded(float(deg))
+            if est >= 0:
+                a.note_echo(float(est))
+                a.is_estimate = True
+            else:
+                a.actual = None
+            if rem >= 0:
+                a.remaining_deg = float(rem)
+            else:
+                a.remaining_deg = None
+            panel.refresh()
+
+        mode_names = {0: "INDIVIDUAL", 1: "MANUAL", 2: "FULL SEQUENCE"}
+        m_str = mode_names.get(mode, "IDLE")
+        self.sequence_panel._mode = m_str
+        self.sequence_panel._step = step
+        self.sequence_panel._step_text = f"{step} / 3"
+        self.sequence_panel._status = f"Vehicle: Mode={m_str}, Step={step}/3"
+        self.sequence_panel.refresh()
+        self.refresh()
+
+    def handle_command_reply(self, cmd: str, status: str, details: dict, raw_line: str) -> None:
+        cmd_u = cmd.upper()
+        cal = self.calibration.get(VehicleID.ROCKET)
+        if status == "ACK":
+            if cmd_u == "CALA":
+                if cal:
+                    cal.set("ALTITUDE", CalibrationOutcome.PASS,
+                            f"p0={details.get('p0_Pa')} Pa, T0={details.get('T0')} °C, gnss0={details.get('gnss_ground')} m")
+            elif cmd_u == "CALI":
+                if cal:
+                    cal.set("IMU", CalibrationOutcome.PASS,
+                            f"axis={details.get('axis')}, bias={details.get('bias_mm_s2')} mm/s2, tilt={details.get('bno_tilt')}°")
+            elif cmd_u == "CAL":
+                if cal:
+                    alt_ok = (details.get("alt_result") == "OK")
+                    imu_ok = (details.get("imu_result") == "OK")
+                    cal.set("ALTITUDE", CalibrationOutcome.PASS if alt_ok else CalibrationOutcome.FAIL)
+                    cal.set("IMU", CalibrationOutcome.PASS if imu_ok else CalibrationOutcome.FAIL)
+            self.notice.emit(f"ACK: {cmd} executed successfully")
+        elif status == "NACK":
+            reason = details.get("reason", "unknown")
+            if "CALA" in cmd_u or "ALT" in cmd_u:
+                if cal:
+                    cal.set("ALTITUDE", CalibrationOutcome.FAIL, f"Refused: {reason}")
+            elif "CALI" in cmd_u or "IMU" in cmd_u:
+                if cal:
+                    cal.set("IMU", CalibrationOutcome.FAIL, f"Refused: {reason}")
+            elif "CAL" in cmd_u:
+                if cal:
+                    cal.set("ALTITUDE", CalibrationOutcome.FAIL, f"Refused: {reason}")
+                    cal.set("IMU", CalibrationOutcome.FAIL, f"Refused: {reason}")
+            self.notice.emit(f"NACK: {cmd} refused ({reason})")
+
+        # Map firmware reply name to potential GUI command names
+        alias_groups = {
+            "SD": ["ENABLE_TELEMETRY", "LIVE", "SET_MODE_LIVE", "SD"],
+            "XD": ["DISABLE_TELEMETRY", "HIBERNATE", "SET_MODE_HIBERNATE", "XD"],
+            "CALA": ["CALIBRATE_ALTITUDE", "CALA", "CAL,1"],
+            "CALI": ["CALIBRATE_IMU", "CALI", "CAL,2"],
+            "CAL": ["CALIBRATE_ALL", "CAL"],
+            "LOCK": ["LOCK:DOOR", "LOCK:CANSAT", "LOCK:SEPARATION", "LOCK,0", "LOCK,1", "LOCK,2", "LOCK"],
+            "UNLOCK": ["UNLOCK:DOOR", "UNLOCK:CANSAT", "UNLOCK:SEPARATION", "UNLOCK,0", "UNLOCK,1", "UNLOCK,2", "UNLOCK"],
+            "SV": ["DOOR:30", "DOOR:60", "DOOR:90", "CANSAT:30", "CANSAT:60", "CANSAT:90", "SEPARATION:30", "SEPARATION:60", "SEPARATION:90", "SV"],
+            "LOCKALL": ["LOCK ALL", "LOCK:ALL", "LOCKALL"],
+            "SEQRST": ["RESET", "SEQRST"],
+            "MSEQ": ["MANUAL SEQUENCE", "TEST5", "MSEQ"],
+            "NSTEP": ["NEXT", "NEXT SEQUENCE STEP", "NSTEP"],
+            "FSEQ": ["FULL SEQUENCE", "TEST6", "FSEQ"],
+            "TEST1": ["TEST1"],
+            "TEST2": ["TEST2"],
+            "TEST3": ["TEST3"],
+            "RF": ["REFRESH_PROCESSOR", "RF"],
+            "FQ": ["FQ,0", "FQ,1", "FREQ:ROCKET:ORIGINAL", "FREQ:ROCKET:BACKUP"],
+            "TX": ["TX,0", "TX,1"],
+            "PG": ["PG"],
+            "BZ": ["BZ,0", "BZ,1"],
+            "FPL": ["FPL", "FPL,1"],
+        }
+        aliases = alias_groups.get(cmd_u, [cmd_u])
+
+        # Also acknowledge in CommandCentre if sequence or command matches
+        for rec in reversed(self.centre.records):
+            if rec.unacknowledged:
+                rec_cmd_u = rec.command.upper()
+                matched = (rec_cmd_u == cmd_u or cmd_u in rec_cmd_u or any(a == rec_cmd_u or a in rec_cmd_u for a in aliases))
+                if matched:
+                    if status == "ACK":
+                        self.centre.acknowledge(rec.sequence, raw_line)
+                        self.centre.mark_executed(rec.sequence, raw_line)
+                    else:
+                        self.centre.reject(rec.sequence, details.get("reason", "NACK"))
+                    break
+
+        self.refresh()
 
 
 if __name__ == "__main__":

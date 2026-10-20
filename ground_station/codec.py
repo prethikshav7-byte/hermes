@@ -61,10 +61,11 @@ from .models import FlightState, RejectReason, VehicleID
 PREFIX_TELEMETRY = "$T"
 PREFIX_HEARTBEAT = "$H"
 PREFIX_FILE = "$F"
+PREFIX_GROUND = "$G"
 
 #: Every prefix this app knows. A parser ignores the others' lines rather
 #: than logging them as malformed (§3.12).
-KNOWN_PREFIXES = (PREFIX_TELEMETRY, PREFIX_HEARTBEAT, PREFIX_FILE)
+KNOWN_PREFIXES = (PREFIX_TELEMETRY, PREFIX_HEARTBEAT, PREFIX_FILE, PREFIX_GROUND)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,11 +218,11 @@ FIELD_SPEC_19: Tuple[FieldDef, ...] = (
     FieldDef("gnss_longitude",    _to_scaled_float(10000.0),  "deg",   "0.0001 deg resolution",             "{:.6f}"),
     FieldDef("gnss_altitude",     _to_scaled_float(10.0),     "m",     "0.1m resolution",                   "{:.2f}"),
     FieldDef("gnss_satellites",   _to_int,                    "",      "number of satellites",              "{}"),
-    FieldDef("accelerometer",     _to_accelerometer,          "m/s²",  "m/s2 resolution",                   "{:.2f}"),
-    FieldDef("gyro_spin_rate",    _to_float,                  "deg/s", "deg/s spin rate",                   "{:.2f}"),
+    FieldDef("accelerometer",     _to_scaled_float(10.0),     "m/s²",  "0.1 m/s2 resolution",               "{:.2f}"),
+    FieldDef("gyro_spin_rate",    _to_scaled_float(10.0),     "deg/s", "0.1 deg/s spin rate",               "{:.2f}"),
     FieldDef("state",             _to_state,                  "",      "0..7 flight software state",        "{}"),
-    FieldDef("velocity",          _to_float,                  "m/s",   "m/s velocity",                      "{:.2f}"),
     FieldDef("vehicle_id",        _to_vehicle,                "",      "1-ROCKET, 2-CANSAT",                "{}"),
+    FieldDef("velocity",          _to_float,                  "m/s",   "m/s velocity",                      "{:.2f}"),
 )
 
 #: Legacy 21-field wire order ($T + 20 payload fields + checksum = 21 fields)
@@ -413,32 +414,40 @@ class CsvCodec(PacketCodec):
             checksum_field = parts[1 + n_fields].strip() if len(parts) > 1 + n_fields else ""
             extra_fields = parts[2 + n_fields:]
         else:
-            if len(parts) < 19:
-                raise CodecError(
-                    RejectReason.FIELD_COUNT,
-                    f"expected exactly 19 fields, got {len(parts)}",
-                )
-            if len(parts) > 19 and not any("=" in p for p in parts[19:]):
-                raise CodecError(
-                    RejectReason.FIELD_COUNT,
-                    f"expected exactly 19 fields, got {len(parts)}",
-                )
             spec_list = FIELD_SPEC_19
             n_fields = len(FIELD_SPEC_19)
+            if len(parts) < 18:
+                raise CodecError(
+                    RejectReason.FIELD_COUNT,
+                    f"expected at least 18 fields ($T + 17 payload), got {len(parts)}",
+                )
             payload_fields = parts[1:1 + n_fields]
-            checksum_field = parts[1 + n_fields].strip() if len(parts) > 1 + n_fields else ""
-            extra_fields = parts[2 + n_fields:]
+            rem = parts[1 + n_fields:]
+            checksum_field = ""
+            extra_fields = []
+            if len(rem) > 0:
+                first_rem = rem[0].strip()
+                covered_chk = PREFIX_TELEMETRY + "," + ",".join(payload_fields)
+                expected_chk = xor_checksum(covered_chk)
+                if "=" not in first_rem and (len(first_rem) <= 4 or first_rem.upper() == expected_chk.upper()):
+                    checksum_field = first_rem
+                    extra_fields = rem[1:]
+                else:
+                    extra_fields = rem
 
         # ── verify checksum before converting ────────────────────────────
         covered = PREFIX_TELEMETRY + "," + ",".join(payload_fields)
         expected = xor_checksum(covered)
         if checksum_field:
-            ck_match = (checksum_field.upper() == expected)
+            ck_match = (checksum_field.upper() == expected.upper())
             if not ck_match:
                 try:
-                    ck_match = (int(checksum_field) == int(expected, 16))
+                    ck_match = (int(checksum_field, 16) == int(expected, 16))
                 except ValueError:
-                    pass
+                    try:
+                        ck_match = (int(checksum_field) == int(expected, 16))
+                    except ValueError:
+                        pass
             if not ck_match:
                 raise CodecError(
                     RejectReason.CHECKSUM,
@@ -490,7 +499,7 @@ class CsvCodec(PacketCodec):
         extras, unknown = _parse_extras(extra_fields)
         return DecodedFrame(values=values, extras=extras, unknown_extras=unknown)
 
-    def encode(self, values: Dict[str, Any]) -> str:
+    def encode(self, values: Dict[str, Any], include_checksum: bool = True) -> str:
         out: List[str] = []
         is_19 = "gyro_spin_rate" in values or "velocity" in values or "accelerometer" in values or ("accel_x" not in values)
         spec_list = FIELD_SPEC_19 if is_19 else FIELD_SPEC_21
@@ -516,7 +525,9 @@ class CsvCodec(PacketCodec):
             else:
                 out.append(str(v))
         covered = PREFIX_TELEMETRY + "," + ",".join(out)
-        return covered + "," + xor_checksum(covered)
+        if include_checksum:
+            return covered + "," + xor_checksum(covered)
+        return covered
 
 
 def _parse_extras(fields: Sequence[str]) -> Tuple[Dict[str, str], Tuple[str, ...]]:

@@ -25,7 +25,7 @@ import time
 
 from ..codec import (
     CodecError, CsvCodec, DecodedFrame, PacketCodec,
-    PREFIX_FILE, PREFIX_HEARTBEAT, PREFIX_TELEMETRY, decode_heartbeat,
+    PREFIX_FILE, PREFIX_HEARTBEAT, PREFIX_TELEMETRY, PREFIX_GROUND, decode_heartbeat,
 )
 from ..models import (
     ReceiverHeartbeat, RejectReason, RejectedLine, TelemetryPacket,
@@ -320,6 +320,10 @@ class TelemetryDemux:
 
         self.ignored_lines: int = 0
         self.on_file_frame: Optional[Callable[[str], None]] = None
+        self.on_command_ack: Optional[Callable[[str, str, Dict[str, Any], str], None]] = None
+        self.on_ground_cmd: Optional[Callable[[int, str, str, str], None]] = None
+        self.on_servo_report: Optional[Callable[[int, float, float, float, int, int, str], None]] = None
+        self.on_lora_status: Optional[Callable[[str, str], None]] = None
         self.notices: List[str] = []
         self._latest_rssi: Optional[float] = None
         self._latest_snr: Optional[float] = None
@@ -347,13 +351,43 @@ class TelemetryDemux:
         if not text:
             return None
 
+        # Rocket replies ($H,ACK / $H,NACK / $H,SV)
         if text.startswith(PREFIX_HEARTBEAT + ","):
+            if text.startswith(PREFIX_HEARTBEAT + ",ACK,") or text.startswith(PREFIX_HEARTBEAT + ",NACK,"):
+                self._feed_command_ack(text, received_at)
+                return None
+            if text.startswith(PREFIX_HEARTBEAT + ",SV,"):
+                self._feed_servo_report(text, received_at)
+                return None
             self._feed_heartbeat(text, received_at)
             return None
 
         if text.startswith(PREFIX_FILE + ","):
             if self.on_file_frame is not None:
                 self.on_file_frame(text)
+            return None
+
+        # Ground station command status ($G,CMD,<id>,<status>[,<info>])
+        if text.startswith(PREFIX_GROUND + ",CMD,"):
+            self._feed_ground_cmd(text, received_at)
+            return None
+
+        # Ground station periodic status / config lines
+        if text.startswith(PREFIX_GROUND + ",STATUS,"):
+            self._last_heartbeat_at = received_at
+            self.notices.append(f"HW: {text}")
+            return None
+
+        if text.startswith(PREFIX_GROUND + ",LORA,"):
+            parts = text.split(",")
+            lora_state = parts[2].upper() if len(parts) > 2 else ""
+            if self.on_lora_status is not None:
+                self.on_lora_status(lora_state, text)
+            self.notices.append(f"LoRa radio: {lora_state}")
+            return None
+
+        if text.startswith(PREFIX_GROUND + ",READY,"):
+            self.notices.append(f"Ground ready: {text}")
             return None
 
         # Parse ground station receiver diagnostic RSSI / SNR lines
@@ -369,11 +403,149 @@ class TelemetryDemux:
             self._parse_lora_rx_error(text, received_at)
             return None
 
+        # Route ground station and flight computer status/config lines ($G, GPS, LORA, BITE, $B)
+        if (text.startswith(PREFIX_GROUND + ",") or text.startswith("GPS,") or
+                text.startswith("LORA,") or text.startswith("BITE,") or text.startswith("$B,")):
+            self.notices.append(f"HW: {text}")
+            return None
+
         if not (text.startswith(PREFIX_TELEMETRY + ",") or text.startswith("PKT=")):
             self.ignored_lines += 1
             return None
 
         return self._feed_telemetry(text, received_at)
+
+    def _feed_ground_cmd(self, text: str, received_at: float) -> None:
+        parts = [p.strip() for p in text.split(",")]
+        # Format: $G,CMD,<id>,<status>[,<info>]
+        cmd_id = 0
+        if len(parts) > 2:
+            try:
+                cmd_id = int(parts[2])
+            except ValueError:
+                cmd_id = 0
+        status = parts[3].upper() if len(parts) > 3 else ""
+        info = parts[4] if len(parts) > 4 else ""
+        if self.on_ground_cmd is not None:
+            self.on_ground_cmd(cmd_id, status, info, text)
+        msg = f"Ground CMD #{cmd_id}: {status}" + (f" ({info})" if info else "")
+        self.notices.append(msg)
+
+    def _feed_servo_report(self, text: str, received_at: float) -> None:
+        # $H,SV,<ch>,<deg>,<estimated_deg>,<remaining_deg>,<seq_mode>,<seq_step>
+        parts = [p.strip() for p in text.split(",")]
+        if len(parts) >= 8:
+            try:
+                ch = int(parts[2])
+                deg = float(parts[3])
+                est = float(parts[4])
+                rem = float(parts[5])
+                mode = int(parts[6])
+                step = int(parts[7])
+                if self.on_servo_report is not None:
+                    self.on_servo_report(ch, deg, est, rem, mode, step, text)
+            except (ValueError, IndexError):
+                pass
+        self.notices.append(f"Servo report: {text}")
+
+    def _feed_command_ack(self, text: str, received_at: float) -> None:
+        parts = [p.strip() for p in text.split(",")]
+        status = parts[1].upper() if len(parts) > 1 else ""
+        cmd = parts[2].upper() if len(parts) > 2 else ""
+        details: Dict[str, Any] = {}
+        if status == "ACK":
+            if cmd == "CALA":
+                # $H,ACK,CALA,<n>,<p0_Pa>,<T0_0.1C>,<gnss_ground_0.1m>
+                if len(parts) >= 7:
+                    details["n"] = parts[3]
+                    details["p0_Pa"] = parts[4]
+                    try:
+                        details["T0"] = float(parts[5]) / 10.0
+                    except ValueError:
+                        details["T0"] = parts[5]
+                    try:
+                        details["gnss_ground"] = float(parts[6]) / 10.0
+                    except ValueError:
+                        details["gnss_ground"] = parts[6]
+            elif cmd == "CALI":
+                # $H,ACK,CALI,<n>,<axis>,<sign>,<bias_mm/s2>,<sin_elev_1e-4>,<spin_axis>,<spin_sign>,<bno_ok>,<bno_tilt_0.1deg>
+                if len(parts) >= 12:
+                    details["n"] = parts[3]
+                    details["axis"] = parts[4]
+                    details["sign"] = parts[5]
+                    details["bias_mm_s2"] = parts[6]
+                    details["sin_elev"] = parts[7]
+                    details["spin_axis"] = parts[8]
+                    details["spin_sign"] = parts[9]
+                    details["bno_ok"] = parts[10]
+                    try:
+                        details["bno_tilt"] = float(parts[11]) / 10.0
+                    except ValueError:
+                        details["bno_tilt"] = parts[11]
+            elif cmd == "CAL":
+                # $H,ACK,CAL,<n>,<alt result>,<imu result>
+                if len(parts) >= 6:
+                    details["n"] = parts[3]
+                    details["alt_result"] = parts[4]
+                    details["imu_result"] = parts[5]
+            elif cmd in ("LOCK", "UNLOCK", "SV", "PW"):
+                # $H,ACK,LOCK,<ch>,<deg> or $H,ACK,UNLOCK,<ch>,<deg> or $H,ACK,SV,<ch>,<deg>
+                if len(parts) >= 5:
+                    try:
+                        details["ch"] = int(parts[3])
+                        details["deg"] = float(parts[4])
+                    except ValueError:
+                        pass
+            elif cmd == "NSTEP":
+                # $H,ACK,NSTEP,<step>,<ch>
+                if len(parts) >= 5:
+                    try:
+                        details["step"] = int(parts[3])
+                        details["ch"] = int(parts[4])
+                    except ValueError:
+                        pass
+            elif cmd == "ST":
+                # $H,ACK,ST,<state>,<token>,<flags>,<deg0>,<deg1>,<deg2>,<est0>,<est1>,<est2>,<mode>,<step>
+                if len(parts) >= 14:
+                    try:
+                        details["state"] = int(parts[3])
+                        details["token"] = int(parts[4])
+                        details["flags"] = parts[5]
+                        details["deg0"] = float(parts[6])
+                        details["deg1"] = float(parts[7])
+                        details["deg2"] = float(parts[8])
+                        details["est0"] = float(parts[9])
+                        details["est1"] = float(parts[10])
+                        details["est2"] = float(parts[11])
+                        details["seq_mode"] = int(parts[12])
+                        details["seq_step"] = int(parts[13])
+                    except (ValueError, IndexError):
+                        pass
+            elif cmd == "FQ":
+                if len(parts) >= 4:
+                    try:
+                        details["ch"] = int(parts[3])
+                    except ValueError:
+                        pass
+            elif cmd == "TX":
+                if len(parts) >= 4:
+                    try:
+                        details["tx"] = int(parts[3])
+                    except ValueError:
+                        pass
+            elif cmd == "PG":
+                if len(parts) >= 6:
+                    details["rssi"] = parts[3]
+                    details["snr"] = parts[4]
+                    details["ch"] = parts[5]
+        elif status == "NACK":
+            # $H,NACK,<cmd>,<reason>
+            if len(parts) >= 4:
+                details["reason"] = parts[3]
+
+        if self.on_command_ack is not None:
+            self.on_command_ack(cmd, status, details, text)
+        self.notices.append(f"Hardware {status}: {text}")
 
     def _parse_rssi_line(self, text: str) -> None:
         try:
@@ -450,9 +622,9 @@ class TelemetryDemux:
         if text.startswith("PKT="):
             return VehicleID.ROCKET
         parts = [p.strip() for p in text.split(",")]
-        # For 19-field packet ($T at index 0), vehicle is at index 17.
+        # For 18/19-field packet ($T at index 0), vehicle is at index 16.
         # For 21-field packet ($T at index 0), vehicle is at index 2.
-        for idx in (17, 2):
+        for idx in (16, 17, 2, 1):
             if idx < len(parts):
                 token = parts[idx].upper()
                 if token in ("1", "ROCKET"):

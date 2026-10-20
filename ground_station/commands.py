@@ -153,12 +153,190 @@ COMMANDS: Dict[str, CommandSpec] = {
         CommandSpec("LOCK:SEPARATION", "Lock Separation (0° safe position)", Guard.NONE, rocket_only=True),
         CommandSpec("LOCK:ALL", "Lock all servos to safe position (0°)", Guard.NONE, rocket_only=True),
         # RF Frequency selection commands
-        CommandSpec("FREQ:ROCKET:ORIGINAL", "Set Rocket frequency to Original (433.05 MHz)", Guard.NONE),
-        CommandSpec("FREQ:ROCKET:BACKUP", "Set Rocket frequency to Backup (434.79 MHz)", Guard.NONE),
-        CommandSpec("FREQ:CANSAT:ORIGINAL", "Set CanSat frequency to Original (433.25 MHz)", Guard.NONE),
-        CommandSpec("FREQ:CANSAT:BACKUP", "Set CanSat frequency to Backup (434.55 MHz)", Guard.NONE),
+        CommandSpec("FREQ:ROCKET:ORIGINAL", "Set Rocket frequency to Original (866.50 MHz)", Guard.NONE),
+        CommandSpec("FREQ:ROCKET:BACKUP", "Set Rocket frequency to Backup (865.25 MHz)", Guard.NONE),
+        CommandSpec("FREQ:CANSAT:ORIGINAL", "Set CanSat frequency to Original (866.50 MHz)", Guard.NONE),
+        CommandSpec("FREQ:CANSAT:BACKUP", "Set CanSat frequency to Backup (865.25 MHz)", Guard.NONE),
+        # Documented README hardware commands
+        CommandSpec("CAL", "Calibrate all sensors (altitude + IMU)", Guard.GROUND_ONLY),
+        CommandSpec("CALA", "Altitude calibration (pad pressure, temp, GNSS ground alt)", Guard.GROUND_ONLY),
+        CommandSpec("CALI", "IMU calibration (ADXL345 axis/offset, BNO08x gyro zero/spin)", Guard.GROUND_ONLY),
+        CommandSpec("FQ,0", "Set Rocket + Ground radio to Main frequency (866.50 MHz)", Guard.NONE),
+        CommandSpec("FQ,1", "Set Rocket + Ground radio to Backup frequency (865.25 MHz)", Guard.NONE),
+        CommandSpec("GF,0", "Set Ground Station radio to Main frequency (866.50 MHz)", Guard.NONE),
+        CommandSpec("GF,1", "Set Ground Station radio to Backup frequency (865.25 MHz)", Guard.NONE),
+        CommandSpec("TX,0", "Silence rocket transmitter (receiver stays on)", Guard.NONE),
+        CommandSpec("TX,1", "Turn on rocket transmitter", Guard.NONE),
+        CommandSpec("FPL", "Force PRE-LAUNCH state", Guard.NONE),
+        CommandSpec("FPL,1", "Force PRE-LAUNCH overriding checks", Guard.NONE),
+        CommandSpec("FSEQ", "Full sequence: door, +1s CanSat, +1.5s separation", Guard.NONE, rocket_only=True),
+        CommandSpec("RF", "Software reset (reinitialise flight computer)", Guard.NONE),
+        CommandSpec("LOCKALL", "Lock all servos: door 50°, CanSat 80°, separation 80°", Guard.NONE, rocket_only=True),
+        CommandSpec("UNLOCK", "Unlock all servos to 0° safe position", Guard.NONE, rocket_only=True),
+        CommandSpec("LOCK", "Lock selected servo mechanism", Guard.NONE, rocket_only=True),
+        CommandSpec("MSEQ", "Manual deployment sequence start", Guard.NONE, rocket_only=True),
+        CommandSpec("NSTEP", "Advance to next manual deployment step", Guard.NONE, rocket_only=True),
+        CommandSpec("SEQRST", "Reset deployment sequence", Guard.NONE, rocket_only=True),
+        CommandSpec("SEP", "Fire separation mechanism", Guard.DESTRUCTIVE, rocket_only=True, destructive=True),
+        CommandSpec("BZ", "Trigger buzzer test", Guard.NONE, rocket_only=True),
+        CommandSpec("GR", "Reconfigure / restart GNSS module", Guard.NONE),
+        CommandSpec("LR", "Reinitialise LoRa radio", Guard.NONE),
+        CommandSpec("BITE", "Run Built-In Test Equipment diagnostic", Guard.NONE),
+        CommandSpec("ENABLE", "Enable ground station reception", Guard.NONE),
+        CommandSpec("DISABLE", "Disable ground station reception", Guard.NONE),
+        CommandSpec("GS", "Ground station status query", Guard.NONE),
+        CommandSpec("LIVE", "Set live sampling mode", Guard.CONFIRM_IN_FLIGHT),
+        CommandSpec("HIBERNATE", "Set hibernate mode", Guard.CONFIRM_IN_FLIGHT),
+        # Channel-specific actuator lock/unlock and servo angles
+        CommandSpec("UNLOCK:DOOR", "Unlock Rocket Door (0° safe position)", Guard.NONE, rocket_only=True),
+        CommandSpec("UNLOCK:CANSAT", "Unlock CanSat deployment (0° safe position)", Guard.NONE, rocket_only=True),
+        CommandSpec("UNLOCK:SEPARATION", "Unlock Separation (0° safe position)", Guard.NONE, rocket_only=True),
+        CommandSpec("LOCK,0", "Lock Rocket Door (50° safe position)", Guard.NONE, rocket_only=True),
+        CommandSpec("LOCK,1", "Lock CanSat deployment (80° safe position)", Guard.NONE, rocket_only=True),
+        CommandSpec("LOCK,2", "Lock Separation (80° safe position)", Guard.NONE, rocket_only=True),
+        CommandSpec("UNLOCK,0", "Unlock Rocket Door (0° position)", Guard.NONE, rocket_only=True),
+        CommandSpec("UNLOCK,1", "Unlock CanSat deployment (0° position)", Guard.NONE, rocket_only=True),
+        CommandSpec("UNLOCK,2", "Unlock Separation (0° position)", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,0,30", "Set Rocket Door angle to 30°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,0,60", "Set Rocket Door angle to 60°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,0,90", "Set Rocket Door angle to 90°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,1,30", "Set CanSat deployment angle to 30°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,1,60", "Set CanSat deployment angle to 60°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,1,90", "Set CanSat deployment angle to 90°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,2,30", "Set Separation angle to 30°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,2,60", "Set Separation angle to 60°", Guard.NONE, rocket_only=True),
+        CommandSpec("SV,2,90", "Set Separation angle to 90°", Guard.NONE, rocket_only=True),
     ]
 }
+
+
+FIRMWARE_COMMAND_MAP: Dict[str, str] = {
+    # Telemetry and sampling modes
+    "SET_MODE_LIVE": "LIVE",
+    "LIVE": "LIVE",
+    "SET_MODE_HIBERNATE": "HIBERNATE",
+    "HIBERNATE": "HIBERNATE",
+    "ENABLE_TELEMETRY": "ENABLE",
+    "ENABLE": "ENABLE",
+    "DISABLE_TELEMETRY": "TX,0",
+    "DISABLE": "DISABLE",
+    "REQUEST_STATUS": "ST",
+    "ST": "ST",
+    "GS": "GS",
+    "REFRESH_PROCESSOR": "RF",
+    "RF": "RF",
+
+    # Calibration
+    "CALIBRATE_ALL": "CAL",
+    "CAL": "CAL",
+    "CALIBRATE_ALTITUDE": "CALA",
+    "CALA": "CALA",
+    "CALIBRATE_IMU": "CALI",
+    "CALI": "CALI",
+    "CALIBRATE_GNSS": "CALA",
+    "CALIBRATE_TEMPERATURE": "CALA",
+    "CALIBRATE_PRESSURE": "CALA",
+
+    # Actuator channels: 0 = Door, 1 = Payload (CanSat), 2 = Separation
+    "DOOR:30": "SV,0,30",
+    "DOOR:60": "SV,0,60",
+    "DOOR:90": "SV,0,90",
+    "LOCK:DOOR": "LOCK,0",
+    "UNLOCK:DOOR": "UNLOCK,0",
+
+    "CANSAT:30": "SV,1,30",
+    "CANSAT:60": "SV,1,60",
+    "CANSAT:90": "SV,1,90",
+    "LOCK:CANSAT": "LOCK,1",
+    "UNLOCK:CANSAT": "UNLOCK,1",
+
+    "SEPARATION:30": "SV,2,30",
+    "SEPARATION:60": "SV,2,60",
+    "SEPARATION:90": "SV,2,90",
+    "LOCK:SEPARATION": "LOCK,2",
+    "UNLOCK:SEPARATION": "UNLOCK,2",
+
+    # Sequence
+    "LOCK:ALL": "LOCKALL",
+    "LOCKALL": "LOCKALL",
+    "TEST4": "LOCKALL",
+    "RESET": "SEQRST",
+    "SEQRST": "SEQRST",
+    "TEST5": "MSEQ",
+    "MSEQ": "MSEQ",
+    "NEXT": "NSTEP",
+    "NSTEP": "NSTEP",
+    "TEST6": "FSEQ",
+    "FSEQ": "FSEQ",
+
+    # Frequencies
+    "FREQ:ROCKET:ORIGINAL": "FQ,0",
+    "FREQ:ROCKET:BACKUP": "FQ,1",
+    "FREQ:CANSAT:ORIGINAL": "GF,0",
+    "FREQ:CANSAT:BACKUP": "GF,1",
+    "FQ,0": "FQ,0",
+    "FQ,1": "FQ,1",
+    "GF,0": "GF,0",
+    "GF,1": "GF,1",
+    "TX,0": "TX,0",
+    "TX,1": "TX,1",
+
+    # Bench tests and diagnostics
+    "BITE": "BITE",
+    "FPL": "FPL",
+    "FPL,1": "FPL,1",
+    "SEP": "SEP",
+    "BZ,0": "BZ,0",
+    "BZ,1": "BZ,1",
+    "BZ": "BZ,1",
+    "PG": "PG",
+    "LK": "LK",
+    "GR": "GR",
+    "LR": "LR",
+    "TEST1": "TEST1",
+    "TEST2": "TEST2",
+    "TEST3": "TEST3",
+}
+
+
+def to_firmware_command(command: str) -> str:
+    """Map any UI / internal command name to the exact firmware command string."""
+    clean = command.strip()
+    if clean in FIRMWARE_COMMAND_MAP:
+        return FIRMWARE_COMMAND_MAP[clean]
+    # Check prefixes
+    if clean.startswith("DOOR:"):
+        ang = clean.split(":")[1]
+        return f"SV,0,{ang}"
+    if clean.startswith("CANSAT:"):
+        ang = clean.split(":")[1]
+        return f"SV,1,{ang}"
+    if clean.startswith("SEPARATION:"):
+        ang = clean.split(":")[1]
+        return f"SV,2,{ang}"
+    if clean == "LOCK:DOOR":
+        return "LOCK,0"
+    if clean == "LOCK:CANSAT":
+        return "LOCK,1"
+    if clean == "LOCK:SEPARATION":
+        return "LOCK,2"
+    if clean == "UNLOCK:DOOR":
+        return "UNLOCK,0"
+    if clean == "UNLOCK:CANSAT":
+        return "UNLOCK,1"
+    if clean == "UNLOCK:SEPARATION":
+        return "UNLOCK,2"
+    if clean in ("LOCK:ALL", "TEST4"):
+        return "LOCKALL"
+    if clean == "RESET":
+        return "SEQRST"
+    if clean == "TEST5":
+        return "MSEQ"
+    if clean == "NEXT":
+        return "NSTEP"
+    if clean == "TEST6":
+        return "FSEQ"
+    return clean
 
 
 @dataclass(frozen=True)
@@ -246,10 +424,8 @@ class CommandStatus(Enum):
 
 
 #: §10.7 — how long before an unacknowledged command is called out.
-#: Generous relative to the link: an uplink at LoRa rates plus vehicle
-#: turnaround is well under a second, so 4 s means "this did not arrive"
-#: rather than "this is slow".
-ACK_TIMEOUT_S = 4.0
+#: Aligned with Ground Teensy's 8 retries @ 2s (16s + 2s margin).
+ACK_TIMEOUT_S = 18.0
 
 
 @dataclass
@@ -285,10 +461,16 @@ class CommandRecord:
 
 BENCH_COMMANDS = (
     "TEST1", "TEST2", "TEST3", "TEST4", "TEST5", "NEXT", "TEST6", "RESET", "START", "CONFIRM",
-    "DOOR:30", "DOOR:60", "DOOR:90", "LOCK:DOOR",
-    "CANSAT:30", "CANSAT:60", "CANSAT:90", "LOCK:CANSAT",
-    "SEPARATION:30", "SEPARATION:60", "SEPARATION:90", "LOCK:SEPARATION",
+    "DOOR:30", "DOOR:60", "DOOR:90", "LOCK:DOOR", "UNLOCK:DOOR",
+    "CANSAT:30", "CANSAT:60", "CANSAT:90", "LOCK:CANSAT", "UNLOCK:CANSAT",
+    "SEPARATION:30", "SEPARATION:60", "SEPARATION:90", "LOCK:SEPARATION", "UNLOCK:SEPARATION",
+    "LOCK,0", "LOCK,1", "LOCK,2", "UNLOCK,0", "UNLOCK,1", "UNLOCK,2",
+    "SV,0,30", "SV,0,60", "SV,0,90", "SV,1,30", "SV,1,60", "SV,1,90", "SV,2,30", "SV,2,60", "SV,2,90",
     "LOCK:ALL",
+    "CAL", "CALA", "CALI", "FQ,0", "FQ,1", "GF,0", "GF,1", "TX,0", "TX,1", "FPL", "FPL,1",
+    "FSEQ", "RF", "PG", "LK", "SD", "XD", "SEP", "BITE", "ST", "SV", "PW",
+    "LOCK", "UNLOCK", "LOCKALL", "MSEQ", "NSTEP", "SEQRST", "BZ", "GR", "LR",
+    "ENABLE", "DISABLE", "GS", "LIVE", "HIBERNATE",
 )
 
 
@@ -405,6 +587,40 @@ class CommandCentre:
         if rec is not None:
             rec.receiver_forwarded = True
 
+    def handle_ground_cmd(self, sequence: int, status: str,
+                          info: str = "", raw_line: str = ""
+                          ) -> Optional[CommandRecord]:
+        """Handle a $G,CMD,<id>,<status>[,<info>] notification from Ground Teensy."""
+        rec = self._by_sequence.get(sequence)
+        if rec is None:
+            if sequence == 0:
+                for r in reversed(self.records):
+                    if r.unacknowledged:
+                        rec = r
+                        break
+            if rec is None:
+                return None
+
+        status_u = status.upper().strip()
+        if status_u == "OK":
+            return self.acknowledge(rec.sequence, info or raw_line or "OK")
+        elif status_u == "QUEUED":
+            rec.status = CommandStatus.SENT
+            rec.response = "QUEUED"
+        elif status_u == "SENT":
+            rec.status = CommandStatus.SENT
+            rec.receiver_forwarded = True
+            rec.response = f"Uplink try {info}" if info else "SENT"
+        elif status_u in ("REJECTED", "BADCMD"):
+            return self.reject(rec.sequence, info or status_u)
+        elif status_u == "FAILED":
+            rec.status = CommandStatus.TIMED_OUT
+            rec.response = f"Failed: {info}" if info else "Failed: no_reply"
+            self.modes[rec.target].abandon(rec.sequence)
+        elif status_u == "BUSY":
+            return self.reject(rec.sequence, f"BUSY: {info}" if info else "BUSY")
+        return rec
+
     # ── timeouts ─────────────────────────────────────────────────────────
 
     def poll_timeouts(self, now: Optional[float] = None) -> List[CommandRecord]:
@@ -416,8 +632,6 @@ class CommandCentre:
         now = now or time.monotonic()
         out = []
         for rec in self.records:
-            if rec.command in BENCH_COMMANDS:
-                continue
             if rec.status is CommandStatus.SENT and rec.age(now) > self.ack_timeout:
                 rec.status = CommandStatus.TIMED_OUT
                 self.modes[rec.target].abandon(rec.sequence)

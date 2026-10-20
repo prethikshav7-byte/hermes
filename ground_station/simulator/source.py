@@ -50,6 +50,9 @@ class SimulatedSource(QObject):
     receiver_state_changed = pyqtSignal(object)
     vehicle_state_changed = pyqtSignal(object, object)
     notice = pyqtSignal(str)
+    command_reply = pyqtSignal(str, str, dict, str)
+    ground_cmd = pyqtSignal(int, str, str, str)
+    servo_report = pyqtSignal(int, float, float, float, int, int, str)
 
     #: Emitted when a fault is injected, so a tester can see what the
     #: simulator did without reading faults.py.
@@ -63,6 +66,9 @@ class SimulatedSource(QObject):
         active_schedule = schedule if schedule is not None else FaultSchedule()
         self.engine = SimulatorEngine(active_schedule, profile)
         self.demux = TelemetryDemux(self.engine.codec, thresholds)
+        self.demux.on_command_ack = lambda cmd, st, det, raw: self.command_reply.emit(cmd, st, det, raw)
+        self.demux.on_ground_cmd = lambda cmd_id, st, info, raw: self.ground_cmd.emit(cmd_id, st, info, raw)
+        self.demux.on_servo_report = lambda ch, deg, est, rem, mode, step, raw: self.servo_report.emit(ch, deg, est, rem, mode, step, raw)
 
         self._receiver_state = ReceiverState.NO_HEARTBEAT
         self._vehicle_states: Dict[VehicleID, VehicleLinkState] = {
@@ -153,6 +159,63 @@ class SimulatedSource(QObject):
             return sequence
 
         self.notice.emit(f"[SIM] {target.value} acknowledged {command}")
+
+        # Simulate ACK reply for command tracking & UI state feedback
+        cmd_head = command.split(",")[0].split(":")[0].upper()
+        details = {}
+        if cmd_head in ("CALA", "CALIBRATE_ALTITUDE"):
+            details = {"p0_Pa": 101325, "T0": 24.5, "gnss_ground": 45.0}
+        elif cmd_head in ("CALI", "CALIBRATE_IMU"):
+            details = {"axis": "Z", "bias_mm_s2": 0, "bno_tilt": 0.05}
+        elif cmd_head in ("CAL", "CALIBRATE_ALL"):
+            details = {"alt_result": "OK", "imu_result": "OK"}
+
+        self.command_reply.emit(cmd_head, "ACK", details, f"$H,ACK,{cmd_head}")
+
+        # Handle servo feedback in simulation
+        if ":" in command:
+            parts = command.split(":")
+            act, val = parts[0].upper(), parts[1]
+            try:
+                deg = float(val)
+                ch_map = {"DOOR": 0, "CANSAT": 1, "SEPARATION": 2}
+                if act in ch_map:
+                    ch = ch_map[act]
+                    self.servo_report.emit(ch, deg, deg, 0.0, 0, 0, f"$H,SV,{ch},{deg:.1f},{deg:.1f},0.0,0,0")
+            except ValueError:
+                pass
+        elif command.startswith("SV,"):
+            parts = command.split(",")
+            if len(parts) >= 3:
+                try:
+                    ch = int(parts[1])
+                    deg = float(parts[2])
+                    self.servo_report.emit(ch, deg, deg, 0.0, 0, 0, f"$H,SV,{ch},{deg:.1f},{deg:.1f},0.0,0,0")
+                except ValueError:
+                    pass
+        elif command.startswith("LOCK:") or command.startswith("LOCK,"):
+            act = command.replace("LOCK:", "").replace("LOCK,", "").strip().upper()
+            ch_map = {"DOOR": 0, "CANSAT": 1, "SEPARATION": 2, "0": 0, "1": 1, "2": 2}
+            if act in ch_map:
+                ch = ch_map[act]
+                self.servo_report.emit(ch, 0.0, 0.0, 0.0, 0, 0, f"$H,SV,{ch},0.0,0.0,0.0,0,0")
+        elif command.startswith("UNLOCK:") or command.startswith("UNLOCK,"):
+            act = command.replace("UNLOCK:", "").replace("UNLOCK,", "").strip().upper()
+            ch_map = {"DOOR": 0, "CANSAT": 1, "SEPARATION": 2, "0": 0, "1": 1, "2": 2}
+            if act in ch_map:
+                ch = ch_map[act]
+                self.servo_report.emit(ch, 90.0, 90.0, 0.0, 0, 0, f"$H,SV,{ch},90.0,90.0,0.0,0,0")
+        elif command.upper() == "FSEQ":
+            self.servo_report.emit(0, 90.0, 90.0, 0.0, 2, 3, "$H,SV,0,90.0,90.0,0.0,2,3")
+            self.servo_report.emit(1, 90.0, 90.0, 0.0, 2, 3, "$H,SV,1,90.0,90.0,0.0,2,3")
+            self.servo_report.emit(2, 90.0, 90.0, 0.0, 2, 3, "$H,SV,2,90.0,90.0,0.0,2,3")
+        elif command.upper() == "MSEQ":
+            self.servo_report.emit(0, 0.0, 0.0, 0.0, 1, 0, "$H,SV,0,0.0,0.0,0.0,1,0")
+        elif command.upper() == "SEQRST":
+            self.servo_report.emit(0, 0.0, 0.0, 0.0, 0, 0, "$H,SV,0,0.0,0.0,0.0,0,0")
+            self.servo_report.emit(1, 0.0, 0.0, 0.0, 0, 0, "$H,SV,1,0.0,0.0,0.0,0,0")
+            self.servo_report.emit(2, 0.0, 0.0, 0.0, 0, 0, "$H,SV,2,0.0,0.0,0.0,0,0")
+
         return sequence
 
     # ── tick ─────────────────────────────────────────────────────────────
@@ -207,7 +270,7 @@ class SimulatedSource(QObject):
     def _poll_health(self) -> None:
         now = time.monotonic()
         age = self.demux.heartbeat_age(now)
-        rx = (ReceiverState.ALIVE if age is not None and age <= 3.0
+        rx = (ReceiverState.ALIVE if (age is not None and age <= 3.0) or self._external_driver
               else ReceiverState.NO_HEARTBEAT)
         if rx is not self._receiver_state:
             self._receiver_state = rx
@@ -230,7 +293,9 @@ class SimulatedSource(QObject):
         """Inject one line directly into the demux pipeline."""
         if received_at is None:
             received_at = time.monotonic()
+        self._set_source(SourceState.CONNECTED)
         self._feed(line)
+        self._poll_health()
 
     # ── read-only views, mirroring LinkSupervisor ────────────────────────
 
