@@ -20,12 +20,14 @@ import math
 import time
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QAbstractListModel, QModelIndex, QPoint, QRect, QSize, Qt, QTimer
+from PyQt6.QtCore import (
+    QAbstractListModel, QModelIndex, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal,
+)
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QListView, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QListView, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+    QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -713,10 +715,13 @@ class VehicleSimulationControl(QWidget):
 class ComPage(QWidget):
     """Aerospace Mission Control COM / Telemetry Communication Console."""
 
+    ports_fetched = pyqtSignal(list)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._supervisor = None
         self._inject_cb: Optional[Callable[[str], None]] = None
+        self._backend_client = None
 
         self._total_packets = 0
         self._valid_packets = 0
@@ -725,6 +730,7 @@ class ComPage(QWidget):
         self._last_packet_time: Optional[float] = None
         self._source_mode = "LIVE"
 
+        self.ports_fetched.connect(self._on_ports_fetched)
         self._build()
 
     # ── Construction ─────────────────────────────────────────────────────
@@ -741,10 +747,10 @@ class ComPage(QWidget):
         # Phase 01: Link Status Bar
         main_layout.addWidget(self._build_link_status_bar())
 
-        # Phase 02: Main Splitter (Left: Half-Height Streams + Simulation | Right: Inspector)
+        # Phase 02: Main Splitter (Left: Dual Streams + Simulation Controls | Right: Inspector & Terminal)
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left Column: Dual Stream Screens (Half Height) + Simulation Controls (Bottom)
+        # Left Column: Dual Stream Screens (Top) + Simulation Controls (Bottom) — directly visible
         left_panel = QWidget()
         left_lay = QVBoxLayout(left_panel)
         left_lay.setContentsMargins(0, 0, 0, 0)
@@ -761,7 +767,6 @@ class ComPage(QWidget):
         streams_lay.addWidget(self.cansat_stream)
         left_lay.addWidget(streams_widget, stretch=1)
 
-        # Simulation Controls underneath streams on left
         sim_box = QWidget()
         sim_lay = QHBoxLayout(sim_box)
         sim_lay.setContentsMargins(0, 0, 0, 0)
@@ -775,15 +780,167 @@ class ComPage(QWidget):
 
         splitter.addWidget(left_panel)
 
-        # Right Column: Full-Height Packet Inspector
-        self.inspector = PacketInspector()
-        splitter.addWidget(self.inspector)
+        # Right Column: Tabbed View (Tab 1: Packet Inspector | Tab 2: Raw Terminal & Uplink)
+        right_panel = QWidget()
+        right_lay = QVBoxLayout(right_panel)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
 
-        splitter.setSizes([600, 800])
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border: 1px solid {c.BORDER}; background: {c.BG_PANEL}; border-radius: 6px; }}"
+            f"QTabBar::tab {{ background: {c.BG_CARD}; color: {c.TEXT_DIM}; padding: 6px 14px; font-weight: bold; border-top-left-radius: 4px; border-top-right-radius: 4px; }}"
+            f"QTabBar::tab:selected {{ background: {c.BG_PANEL}; color: {c.CYAN}; border: 1px solid {c.BORDER}; border-bottom: none; }}"
+        )
+
+        self.inspector = PacketInspector()
+        self.right_tabs.addTab(self.inspector, "Packet Inspector")
+
+        self.terminal_panel = self._build_terminal_panel()
+        self.right_tabs.addTab(self.terminal_panel, "Raw Terminal & Uplink")
+
+        right_lay.addWidget(self.right_tabs)
+        splitter.addWidget(right_panel)
+
+        splitter.setSizes([650, 750])
         main_layout.addWidget(splitter, stretch=1)
 
         # Bottom: Communication Metrics Bar
         main_layout.addWidget(self._build_metrics_bar())
+
+    def _build_terminal_panel(self) -> QWidget:
+        c = ThemeManager.C()
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(8)
+
+        # 1. Port selector & Ground Retune Row
+        port_bar = QFrame()
+        port_bar.setStyleSheet(
+            f"QFrame {{ background-color: {c.BG_CARD}; border: 1px solid {c.BORDER}; border-radius: 4px; }}"
+        )
+        p_lay = QHBoxLayout(port_bar)
+        p_lay.setContentsMargins(10, 6, 10, 6)
+        p_lay.setSpacing(8)
+
+        p_lbl = QLabel("PORT:")
+        p_lbl.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        p_lbl.setStyleSheet(f"color: {c.TEXT_DIM};")
+        p_lay.addWidget(p_lbl)
+
+        self.port_combo = QComboBox()
+        self.port_combo.setFont(QFont("monospace", 8))
+        self.port_combo.setStyleSheet(
+            f"QComboBox {{ background-color: {c.BG_INPUT}; color: {c.TEXT}; border: 1px solid {c.BORDER}; "
+            f"border-radius: 4px; padding: 4px 8px; min-width: 140px; }}"
+        )
+        self.port_combo.addItem("Auto (VID 0x16C0)", "auto")
+        self.port_combo.currentIndexChanged.connect(self._on_port_changed)
+        p_lay.addWidget(self.port_combo)
+
+        self.btn_refresh_ports = QPushButton("Refresh")
+        self.btn_refresh_ports.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        self.btn_refresh_ports.setStyleSheet(
+            f"QPushButton {{ background-color: {c.BG_INPUT}; color: {c.CYAN}; border: 1px solid {c.BORDER}; "
+            f"border-radius: 4px; padding: 4px 8px; }} QPushButton:hover {{ background-color: {c.BG_CARD_HOVER}; }}"
+        )
+        self.btn_refresh_ports.clicked.connect(self.fetch_ports)
+        p_lay.addWidget(self.btn_refresh_ports)
+
+        p_lay.addSpacing(12)
+
+        # Ground Retune buttons (GF,0 / GF,1)
+        retune_lbl = QLabel("GROUND RETUNE:")
+        retune_lbl.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        retune_lbl.setStyleSheet(f"color: {c.TEXT_DIM};")
+        p_lay.addWidget(retune_lbl)
+
+        self.btn_gf0 = QPushButton("GF,0 (866.50)")
+        self.btn_gf0.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        self.btn_gf0.setStyleSheet(ThemeManager.status_button_css("red"))
+        self.btn_gf0.setToolTip("Retune Ground Station radio ONLY to Main frequency (866.50 MHz)")
+        self.btn_gf0.clicked.connect(self._on_gf0_clicked)
+        p_lay.addWidget(self.btn_gf0)
+
+        self.btn_gf1 = QPushButton("GF,1 (865.25)")
+        self.btn_gf1.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        self.btn_gf1.setStyleSheet(ThemeManager.status_button_css("red"))
+        self.btn_gf1.setToolTip("Retune Ground Station radio ONLY to Backup frequency (865.25 MHz)")
+        self.btn_gf1.clicked.connect(self._on_gf1_clicked)
+        p_lay.addWidget(self.btn_gf1)
+
+        p_lay.addStretch()
+        lay.addWidget(port_bar)
+
+        # 2. Scrolling Raw Terminal Log
+        log_card = QFrame()
+        log_card.setStyleSheet(
+            f"QFrame {{ background-color: {c.BG_CARD}; border: 1px solid {c.BORDER}; border-radius: 6px; }}"
+        )
+        log_lay = QVBoxLayout(log_card)
+        log_lay.setContentsMargins(8, 8, 8, 8)
+        log_lay.setSpacing(6)
+
+        hdr_row = QHBoxLayout()
+        hdr_lbl = QLabel("LIVE SERIAL PACKET & MESSAGE LOG")
+        hdr_lbl.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        hdr_lbl.setStyleSheet(f"color: {c.CYAN};")
+        hdr_row.addWidget(hdr_lbl)
+        hdr_row.addStretch()
+
+        self.btn_clear_log = QPushButton("Clear Log")
+        self.btn_clear_log.setFont(QFont("monospace", 7))
+        self.btn_clear_log.setStyleSheet(
+            f"QPushButton {{ background-color: {c.BG_INPUT}; color: {c.TEXT_DIM}; border: 1px solid {c.BORDER}; "
+            f"border-radius: 3px; padding: 2px 6px; }} QPushButton:hover {{ color: {c.TEXT}; }}"
+        )
+        self.btn_clear_log.clicked.connect(lambda: self.raw_log_edit.clear())
+        hdr_row.addWidget(self.btn_clear_log)
+        log_lay.addLayout(hdr_row)
+
+        self.raw_log_edit = QPlainTextEdit()
+        self.raw_log_edit.setReadOnly(True)
+        self.raw_log_edit.setMaximumBlockCount(2000)
+        self.raw_log_edit.setFont(QFont("monospace", 8))
+        self.raw_log_edit.setStyleSheet(
+            f"QPlainTextEdit {{ background-color: #05080f; color: #a5f3fc; border: 1px solid {c.BORDER}; "
+            f"border-radius: 4px; padding: 6px; }}"
+        )
+        self.raw_log_edit.setPlaceholderText("Live raw lines (* messages, telemetry, ACKs, BITE frames) will stream here...")
+        log_lay.addWidget(self.raw_log_edit, stretch=1)
+
+        # 3. Free-text Command Box
+        cmd_bar = QHBoxLayout()
+        cmd_bar.setSpacing(6)
+
+        prompt_lbl = QLabel("CMD >")
+        prompt_lbl.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        prompt_lbl.setStyleSheet(f"color: {c.CYAN};")
+        cmd_bar.addWidget(prompt_lbl)
+
+        self.cmd_input = QLineEdit()
+        self.cmd_input.setFont(QFont("monospace", 8))
+        self.cmd_input.setStyleSheet(
+            f"QLineEdit {{ background-color: {c.BG_INPUT}; color: {c.TEXT}; border: 1px solid {c.BORDER}; "
+            f"border-radius: 4px; padding: 5px 8px; }}"
+        )
+        self.cmd_input.setPlaceholderText("Enter command to send to Teensy (e.g. PG, ST, ENABLE, BITE, FQ,0, RF)...")
+        self.cmd_input.returnPressed.connect(self._send_manual_cmd)
+        cmd_bar.addWidget(self.cmd_input, stretch=1)
+
+        self.btn_send_cmd = QPushButton("Send")
+        self.btn_send_cmd.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        self.btn_send_cmd.setStyleSheet(
+            f"QPushButton {{ background-color: {c.BG_INPUT}; color: {c.CYAN}; border: 1px solid {c.CYAN}; "
+            f"border-radius: 4px; padding: 5px 12px; }} QPushButton:hover {{ background-color: {c.BG_CARD_HOVER}; }}"
+        )
+        self.btn_send_cmd.clicked.connect(self._send_manual_cmd)
+        cmd_bar.addWidget(self.btn_send_cmd)
+
+        log_lay.addLayout(cmd_bar)
+        lay.addWidget(log_card, stretch=1)
+        return w
 
     def _build_header(self) -> QHBoxLayout:
         c = ThemeManager.C()
@@ -1042,6 +1199,101 @@ class ComPage(QWidget):
             )
         self._update_connection_info()
 
+    def set_backend_client(self, client) -> None:
+        self._backend_client = client
+        client.raw_message_received.connect(self.append_raw_line)
+        client.connected.connect(self.fetch_ports)
+        client.state_changed.connect(self._on_client_state)
+        client.buttons_changed.connect(self._on_client_buttons)
+        self.fetch_ports()
+
+    def append_raw_line(self, line: str) -> None:
+        if hasattr(self, "raw_log_edit"):
+            self.raw_log_edit.appendPlainText(line)
+
+    def _on_client_state(self, state: dict) -> None:
+        serial_info = state.get("serial", {})
+        port = serial_info.get("port", "—")
+        self.port_val.setText(str(port))
+        if self._source_mode != "SIMULATION":
+            s_state = serial_info.get("state", "DISCONNECTED").upper()
+            c = ThemeManager.C()
+            colour = c.GREEN if s_state == "CONNECTED" else (c.AMBER if s_state == "CONNECTING" else c.TEXT_MUTED)
+            self.status_dot.setStyleSheet(f"color: {colour}; font-size: 14px;")
+            self.status_lbl.setText(s_state)
+            self.status_lbl.setStyleSheet(f"color: {colour}; font-weight: bold;")
+            self.link_val.setText("ACTIVE" if s_state == "CONNECTED" else "IDLE")
+            self.link_val.setStyleSheet(f"color: {colour};")
+
+    def _on_client_buttons(self, data: dict) -> None:
+        buttons = data.get("buttons", {})
+        default_color = data.get("default", "red")
+        col_0 = buttons.get("GF,0", default_color)
+        col_1 = buttons.get("GF,1", default_color)
+        if hasattr(self, "btn_gf0"):
+            self.btn_gf0.setStyleSheet(ThemeManager.status_button_css(col_0))
+        if hasattr(self, "btn_gf1"):
+            self.btn_gf1.setStyleSheet(ThemeManager.status_button_css(col_1))
+
+    def fetch_ports(self) -> None:
+        def _fetch():
+            import json
+            import urllib.request
+            try:
+                req = urllib.request.Request("http://localhost:8765/api/ports")
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    self.ports_fetched.emit(data.get("ports", []))
+            except Exception:
+                pass
+        import threading
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_ports_fetched(self, ports: list) -> None:
+        if not hasattr(self, "port_combo"):
+            return
+        self.port_combo.blockSignals(True)
+        cur = self.port_combo.currentText()
+        self.port_combo.clear()
+        self.port_combo.addItem("Auto (VID 0x16C0)", "auto")
+        for p in ports:
+            if isinstance(p, dict):
+                dev = p.get("device", "")
+                desc = p.get("description", "")
+                self.port_combo.addItem(f"{dev} ({desc})" if desc else dev, dev)
+            else:
+                self.port_combo.addItem(str(p), str(p))
+        idx = self.port_combo.findText(cur)
+        if idx >= 0:
+            self.port_combo.setCurrentIndex(idx)
+        self.port_combo.blockSignals(False)
+
+    def _on_port_changed(self) -> None:
+        dev = self.port_combo.currentData() or self.port_combo.currentText()
+        if self._backend_client:
+            self._backend_client.select_port(dev)
+
+    def _on_gf0_clicked(self) -> None:
+        if self._backend_client:
+            self._backend_client.send_command("GF,0", key="GF,0")
+        self.append_raw_line(">>> GF,0 (Ground retune: 866.50 MHz)")
+
+    def _on_gf1_clicked(self) -> None:
+        if self._backend_client:
+            self._backend_client.send_command("GF,1", key="GF,1")
+        self.append_raw_line(">>> GF,1 (Ground retune: 865.25 MHz)")
+
+    def _send_manual_cmd(self) -> None:
+        text = self.cmd_input.text().strip()
+        if not text:
+            return
+        self.cmd_input.clear()
+        if self._backend_client:
+            self._backend_client.send_command(text, key=text)
+        elif self._supervisor and hasattr(self._supervisor, "send_command"):
+            self._supervisor.send_command(VehicleID.ROCKET, text)
+        self.append_raw_line(f">>> {text}")
+
     def set_source_state(self, state: SourceState) -> None:
         c = ThemeManager.C()
         colour = {
@@ -1076,6 +1328,7 @@ class ComPage(QWidget):
             self._supervisor.inject_line(line)
         elif self._inject_cb:
             self._inject_cb(line)
+        self.append_raw_line(line.strip())
 
     def _on_packet_selected(self, record: PacketRecord) -> None:
         self.inspector.display_packet(record)

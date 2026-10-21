@@ -22,6 +22,7 @@ mode: they preselect one of the same two and take the same code path.
 """
 from __future__ import annotations
 import argparse
+import os
 import shutil
 import sys
 
@@ -29,7 +30,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QFileDialog
 
 from ground_station.app import GroundStationApp
 from ground_station.launcher import LaunchChoice, LaunchMode, LauncherDialog
-from ground_station.link import LinkSupervisor, SERIAL_AVAILABLE
+from ground_station.link import BackendBridgeSupervisor, LinkSupervisor, SERIAL_AVAILABLE
 from ground_station.logs.raw_log import SessionLogs
 from ground_station.logs.post_flight import PostFlightSource
 from ground_station.simulator.source import SimulatedSource
@@ -69,6 +70,8 @@ def main() -> int:
                     help="open post-flight analysis mode (.csv)")
     ap.add_argument("--port", help="skip the mode screen and connect to a port")
     ap.add_argument("--baud", type=int, default=115200)
+    ap.add_argument("--backend", default=os.environ.get("GS_BACKEND_URL", "ws://localhost:8765/ws"),
+                    help="WebSocket URL for the ground station backend bridge (default ws://localhost:8765/ws)")
     ap.add_argument("--log-dir", default="logs",
                     help="where session logs are written (§12)")
     args = ap.parse_args()
@@ -83,13 +86,6 @@ def main() -> int:
 
     simulator = choice.mode is LaunchMode.SIMULATOR
     post_flight = choice.mode is LaunchMode.POST_FLIGHT
-
-    if not simulator and not post_flight and not SERIAL_AVAILABLE:
-        QMessageBox.critical(
-            None, "pyserial not installed",
-            "Live mode needs pyserial.\n\nInstall it with:\n"
-            "    pip install pyserial")
-        return 1
 
     # Mode label for title and sidebar
     if simulator:
@@ -111,7 +107,7 @@ def main() -> int:
     elif post_flight:
         source = PostFlightSource(choice.filepath or "")
     else:
-        source = LinkSupervisor()
+        source = BackendBridgeSupervisor(ws_url=args.backend)
 
     _attach_logging(source, logs)
     window.connect_supervisor(source)

@@ -54,8 +54,8 @@ class LossThresholds:
     packet counts at the nominal 10 Hz, and would be wrong the moment
     §3.11 option 3 drops the downlink to 3–5 Hz.
     """
-    dropout_max: int = 4        # 1..4 → DROPOUT
-    gap_max: int = 19           # 5..19 → GAP, ≥20 → OUTAGE
+    dropout_max: int = 5        # 1..5 -> DROPOUT (interpolated across)
+    gap_max: int = 19           # 6..19 -> GAP, >=20 -> OUTAGE
 
     def classify(self, missing: int) -> LossTier:
         if missing <= 0:

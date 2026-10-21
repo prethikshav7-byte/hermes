@@ -544,3 +544,69 @@ class LinkSupervisor(QObject):
     @property
     def baudrate(self) -> int:
         return self.source.baudrate if self.source else 115200
+
+
+class BackendBridgeSupervisor(LinkSupervisor):
+    """Bridge supervisor connecting to backend/server.py over WebSocket (ws://localhost:8765/ws).
+    The GUI never opens the serial port directly — all serial communication is owned by server.py.
+    """
+
+    def __init__(self, ws_url: str = "ws://localhost:8765/ws",
+                 codec: Optional[PacketCodec] = None,
+                 thresholds: Optional[LossThresholds] = None, parent=None):
+        super().__init__(codec, thresholds, parent)
+        from .backend_client import GroundStationBackendClient
+        self.client = GroundStationBackendClient(url=ws_url, parent=self)
+        self.client.raw_message_received.connect(self._on_ws_raw_line)
+        self.client.state_changed.connect(self._on_ws_state)
+        self.client.notice.connect(self.notice)
+
+        self._source_state = SourceState.DISCONNECTED
+        self._port_name = "—"
+        self._baudrate = 115200
+
+    def _on_ws_raw_line(self, line: str) -> None:
+        self.inject_line(line)
+
+    def _on_ws_state(self, state: dict) -> None:
+        serial_info = state.get("serial", {})
+        s_state = serial_info.get("state", "DISCONNECTED")
+        self._port_name = serial_info.get("port", "—")
+        if s_state == "CONNECTED":
+            new_st = SourceState.CONNECTED
+        elif s_state == "CONNECTING":
+            new_st = SourceState.CONNECTING
+        else:
+            new_st = SourceState.DISCONNECTED
+
+        if new_st != self._source_state:
+            self._source_state = new_st
+            self.source_state_changed.emit(new_st)
+
+    def connect_to(self, stable_id: Optional[str] = None, baudrate: int = 115200,
+                   device_hint: Optional[str] = None) -> None:
+        if device_hint:
+            self.client.select_port(device_hint)
+        self._timer.start()
+
+    def disconnect_source(self) -> None:
+        self._timer.stop()
+
+    def send_command(self, target: VehicleID, command: str,
+                     sequence: Optional[int] = None) -> int:
+        hw_cmd = to_firmware_command(command)
+        self.client.send_command(hw_cmd, command, seq=sequence)
+        return sequence or 0
+
+    @property
+    def source_state(self) -> SourceState:
+        return self._source_state
+
+    @property
+    def port_name(self) -> str:
+        return self._port_name
+
+    @property
+    def baudrate(self) -> int:
+        return self._baudrate
+

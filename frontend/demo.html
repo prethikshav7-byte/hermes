@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MACHZONE Ground Station — Command Reference</title>
+  <link rel="stylesheet" href="gsButtons.css">
+  <style>
+    body {
+      background-color: #06090e;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      margin: 0;
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      background: #0d1520;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .pill {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #1e293b;
+      background: rgba(13, 26, 40, 0.85);
+    }
+    .pill-green { color: #10b981; }
+    .pill-yellow { color: #f59e0b; }
+    .pill-red { color: #ef4444; }
+    .panel {
+      background: #0d1520;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    .panel-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #38bdf8;
+      margin-bottom: 12px;
+    }
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #94a3b8;
+      width: 90px;
+    }
+    .log-box {
+      background: #04070b;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 12px;
+      height: 180px;
+      overflow-y: auto;
+      color: #38bdf8;
+    }
+    .hint-box {
+      font-size: 12px;
+      color: #f59e0b;
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 8px 14px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div style="font-weight: 900; letter-spacing: 2px;">MACHZONE</div>
+    <div style="color: #ef4444;">|</div>
+    <div style="font-size: 11px; color: #94a3b8; letter-spacing: 1px;">GROUND STATION BRIDGE REFERENCE</div>
+    <div style="flex-grow: 1;"></div>
+    <div id="hdr-status" class="pill pill-red">● DISCONNECTED</div>
+    <div id="hdr-port" class="pill" style="color: #e2e8f0;">PORT: —</div>
+    <div id="hdr-baud" class="pill" style="color: #94a3b8;">Baud 115200</div>
+  </div>
+
+  <div class="hint-box">
+    <strong>OPERATOR SEQUENCE:</strong>
+    1. Plug in Teensy &rarr; header turns CONNECTED (green). &nbsp;|&nbsp;
+    2. Enable (LoRa on). &nbsp;|&nbsp;
+    3. Ping (the rocket transmits nothing until it has heard the ground). &nbsp;|&nbsp;
+    4. Live (telemetry flows, Live turns green).
+  </div>
+
+  <!-- Target & Arm -->
+  <div class="panel">
+    <div class="panel-title">Safety & Target</div>
+    <div class="btn-row">
+      <span class="label">Target:</span>
+      <button class="gs-btn" id="btn-target-rocket" onclick="client.setTarget('ROCKET')">ROCKET</button>
+      <button class="gs-btn" id="btn-target-cansat" onclick="client.setTarget('CANSAT')">CANSAT</button>
+      <span style="margin: 0 10px;">|</span>
+      <span class="label">Arming:</span>
+      <button class="gs-btn" id="btn-arm-toggle" onclick="toggleArm()">ARM</button>
+      <span id="lbl-armed" style="font-weight: bold; color: #10b981; margin-left: 8px;">UNARMED</span>
+    </div>
+  </div>
+
+  <!-- Telemetry Block -->
+  <div class="panel">
+    <div class="panel-title">Telemetry & Radio Control</div>
+    <div class="btn-row">
+      <span class="label">Telemetry:</span>
+      <button class="gs-btn" data-cmd="LIVE" data-key="LIVE">Live</button>
+      <button class="gs-btn" data-cmd="HIBERNATE" data-key="HIBERNATE">Hibernate</button>
+      <button class="gs-btn" data-cmd="ENABLE" data-key="ENABLE">Enable</button>
+      <button class="gs-btn" data-cmd="DISABLE" data-key="DISABLE">Disable</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">Rocket Freq:</span>
+      <button class="gs-btn" data-cmd="FQ,0" data-key="FQ,0" data-confirm="Retune Rocket + Ground to Main channel 866.50 MHz?">Original (866.50 MHz)</button>
+      <button class="gs-btn" data-cmd="FQ,1" data-key="FQ,1" data-confirm="Retune Rocket + Ground to Backup channel 865.25 MHz?">Backup (865.25 MHz)</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">CanSat Freq:</span>
+      <button class="gs-btn" data-cmd="" data-key="CANSAT_ORIGINAL" disabled title="CanSat link not implemented">Original (866.50 MHz)</button>
+      <button class="gs-btn" data-cmd="" data-key="CANSAT_BACKUP" disabled title="CanSat link not implemented">Backup (865.25 MHz)</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">Processor:</span>
+      <button class="gs-btn" data-cmd="RF" data-key="RF" data-confirm="Restart Rocket Flight Computer processor?">Refresh Processor</button>
+      <button class="gs-btn" data-cmd="PG" data-key="PG">Ping</button>
+      <button class="gs-btn" data-cmd="ST" data-key="ST">Status</button>
+      <button class="gs-btn" data-cmd="LK" data-key="LK">Link Check</button>
+      <button class="gs-btn" data-cmd="BITE" data-key="BITE">BITE</button>
+    </div>
+  </div>
+
+  <!-- Actuators Block -->
+  <div class="panel">
+    <div class="panel-title">Actuators & Mechanisms</div>
+    <div class="btn-row">
+      <span class="label">Door:</span>
+      <button class="gs-btn" data-cmd="LOCK,0" data-key="LOCK,0">Lock (50°)</button>
+      <button class="gs-btn" data-cmd="UNLOCK,0" data-key="UNLOCK,0">Unlock (0°)</button>
+      <button class="gs-btn" data-cmd="SV,0,30" data-key="SV,0,30">30°</button>
+      <button class="gs-btn" data-cmd="SV,0,60" data-key="SV,0,60">60°</button>
+      <button class="gs-btn" data-cmd="SV,0,90" data-key="SV,0,90">90°</button>
+      <button class="gs-btn" data-cmd="TEST1" data-key="TEST1">Door Test</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">CanSat:</span>
+      <button class="gs-btn" data-cmd="LOCK,1" data-key="LOCK,1">Lock (80°)</button>
+      <button class="gs-btn" data-cmd="UNLOCK,1" data-key="UNLOCK,1">Unlock (0°)</button>
+      <button class="gs-btn" data-cmd="SV,1,30" data-key="SV,1,30">30°</button>
+      <button class="gs-btn" data-cmd="SV,1,60" data-key="SV,1,60">60°</button>
+      <button class="gs-btn" data-cmd="SV,1,90" data-key="SV,1,90">90°</button>
+      <button class="gs-btn" data-cmd="TEST2" data-key="TEST2">CanSat Test</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">Separation:</span>
+      <button class="gs-btn" data-cmd="LOCK,2" data-key="LOCK,2">Lock (80°)</button>
+      <button class="gs-btn" data-cmd="UNLOCK,2" data-key="UNLOCK,2">Unlock (0°)</button>
+      <button class="gs-btn" data-cmd="SV,2,30" data-key="SV,2,30">30°</button>
+      <button class="gs-btn" data-cmd="SV,2,60" data-key="SV,2,60">60°</button>
+      <button class="gs-btn" data-cmd="SV,2,90" data-key="SV,2,90">90°</button>
+      <button class="gs-btn" data-cmd="TEST3" data-key="TEST3">Sep Test</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">Sequences:</span>
+      <button class="gs-btn" data-cmd="LOCKALL" data-key="LOCKALL">Lock All</button>
+      <button class="gs-btn" data-cmd="MSEQ" data-key="MSEQ">Manual Seq</button>
+      <button class="gs-btn" data-cmd="NSTEP" data-key="NSTEP">Next Step</button>
+      <button class="gs-btn" data-cmd="SEQRST" data-key="SEQRST">Reset Seq</button>
+      <button class="gs-btn" data-cmd="FSEQ" data-key="FSEQ" data-confirm="Trigger FULL deployment sequence?">Full Sequence</button>
+      <button class="gs-btn" data-cmd="SEP" data-key="SEP" data-confirm="Trigger physical separation now?">Fire Separation</button>
+    </div>
+    <div class="btn-row">
+      <span class="label">Calibration:</span>
+      <button class="gs-btn" data-cmd="CAL" data-key="CAL">Calibrate All</button>
+      <button class="gs-btn" data-cmd="CALA" data-key="CALA">Calibrate Alt</button>
+      <button class="gs-btn" data-cmd="CALI" data-key="CALI">Calibrate IMU</button>
+      <button class="gs-btn" data-cmd="BZ,1" data-key="BZ,1">Buzzer ON</button>
+      <button class="gs-btn" data-cmd="BZ,0" data-key="BZ,0">Buzzer OFF</button>
+    </div>
+  </div>
+
+  <!-- Raw Line Log -->
+  <div class="panel">
+    <div class="panel-title">Live Wire Log ($T, $G, $H, $B)</div>
+    <div id="log-box" class="log-box"></div>
+  </div>
+
+  <script src="gsClient.js"></script>
+  <script>
+    const client = new GroundStationClient();
+    const logBox = document.getElementById("log-box");
+
+    function appendLog(text) {
+      const line = document.createElement("div");
+      line.textContent = text;
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    client.on("*", (msg) => {
+      if (msg.raw) {
+        appendLog(msg.raw);
+      }
+    });
+
+    client.on("state", (state) => {
+      const s = state.serial || {};
+      const statusEl = document.getElementById("hdr-status");
+      statusEl.textContent = `● ${s.state || "DISCONNECTED"}`;
+      statusEl.className = "pill";
+      if (s.state === "CONNECTED") statusEl.classList.add("pill-green");
+      else if (s.state === "CONNECTING") statusEl.classList.add("pill-yellow");
+      else statusEl.classList.add("pill-red");
+
+      document.getElementById("hdr-port").textContent = `PORT: ${s.port || "—"}`;
+
+      // Target buttons
+      const rBtn = document.getElementById("btn-target-rocket");
+      const cBtn = document.getElementById("btn-target-cansat");
+      if (state.target === "ROCKET") {
+        rBtn.classList.add("gs-green");
+        cBtn.classList.remove("gs-green");
+      } else {
+        cBtn.classList.add("gs-green");
+        rBtn.classList.remove("gs-green");
+      }
+
+      // Armed display
+      const armLbl = document.getElementById("lbl-armed");
+      const armBtn = document.getElementById("btn-arm-toggle");
+      if (state.armed) {
+        armLbl.textContent = "ARMED";
+        armLbl.style.color = "#ef4444";
+        armBtn.classList.add("gs-armed");
+      } else {
+        armLbl.textContent = "UNARMED";
+        armLbl.style.color = "#10b981";
+        armBtn.classList.remove("gs-armed");
+      }
+    });
+
+    function toggleArm() {
+      client.setArmed(!client.state.armed);
+    }
+
+    // Bind all buttons on load
+    window.addEventListener("DOMContentLoaded", () => {
+      client.bindButtons(document);
+    });
+  </script>
+</body>
+</html>

@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -39,6 +39,7 @@ try:
         ACTUATORS, ARM_TIMEOUT_S, Actuator, ActuatorSpec, ArmingCentre,
         CALIBRATIONS, CalibrationOutcome, CalibrationRun,
     )
+    from ..backend_client import GroundStationBackendClient
     from ..commands import (
         BENCH_COMMANDS, COMMANDS, CommandCentre, CommandRecord, CommandStatus, Guard,
         ModeValue, VehicleModes, check_guard,
@@ -56,6 +57,7 @@ except (ImportError, ValueError):
         ACTUATORS, ARM_TIMEOUT_S, Actuator, ActuatorSpec, ArmingCentre,
         CALIBRATIONS, CalibrationOutcome, CalibrationRun,
     )
+    from ground_station.backend_client import GroundStationBackendClient
     from ground_station.commands import (
         BENCH_COMMANDS, COMMANDS, CommandCentre, CommandRecord, CommandStatus, Guard,
         ModeValue, VehicleModes, check_guard,
@@ -177,6 +179,8 @@ class ActuatorPanel(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(4)
+        self.buttons: Dict[str, QPushButton] = {}
+        ch = self.spec.channel
 
         # [ Lock ] and [ Unlock ]
         self._lock_btn = QPushButton("Lock")
@@ -186,6 +190,7 @@ class ActuatorPanel(QWidget):
         lock_deg = lock_angles.get(self.spec.id, 50)
         self._lock_btn.setToolTip(f"Lock {self.spec.mechanism.lower()} ({lock_deg}° safe position)")
         self._lock_btn.clicked.connect(self._on_lock_clicked)
+        self.buttons[f"LOCK,{ch}"] = self._lock_btn
         row.addWidget(self._lock_btn)
 
         self._unlock_btn = QPushButton("Unlock")
@@ -193,6 +198,7 @@ class ActuatorPanel(QWidget):
         self._unlock_btn.setStyleSheet(_btn_css(c.CYAN))
         self._unlock_btn.setToolTip(f"Unlock {self.spec.mechanism.lower()} (0° safe position)")
         self._unlock_btn.clicked.connect(self._on_unlock_clicked)
+        self.buttons[f"UNLOCK,{ch}"] = self._unlock_btn
         row.addWidget(self._unlock_btn)
 
         # [ 30° ] [ 60° ] [ 90° ]
@@ -204,18 +210,20 @@ class ActuatorPanel(QWidget):
             b.setToolTip(f"Command {self.spec.mechanism.lower()} to {angle}°")
             b.clicked.connect(lambda _c, a=angle: self._on_angle_clicked(a))
             self._angle_buttons[angle] = b
+            self.buttons[f"SV,{ch},{angle}"] = b
             row.addWidget(b)
 
         row.addStretch()
 
         cmd_map = {"ACT_DOOR": "TEST1", "ACT_DEPLOY": "TEST2", "ACT_SEPARATE": "TEST3"}
-        cmd_name = cmd_map.get(self.spec.id, "TEST1")
+        cmd_name = cmd_map.get(self.spec.id, f"TEST{ch+1}")
 
         self._send_btn = QPushButton("Send")
         self._send_btn.setFont(QFont("monospace", 8, QFont.Weight.Bold))
         self._send_btn.setStyleSheet(_btn_css(c.CYAN))
         self._send_btn.setToolTip(f"Transmit {cmd_name} over serial uplink")
         self._send_btn.clicked.connect(self._on_send_clicked)
+        self.buttons[cmd_name] = self._send_btn
         row.addWidget(self._send_btn)
 
         lay.addLayout(row)
@@ -364,24 +372,27 @@ class ModePanel(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
+        self.buttons: Dict[str, QPushButton] = {}
 
         # Row 0: [ Live ] [ Hibernate ]
-        for i, (cmd, label) in enumerate([("SET_MODE_LIVE", "Live"), ("SET_MODE_HIBERNATE", "Hibernate")]):
+        for i, (cmd, label) in enumerate([("LIVE", "Live"), ("HIBERNATE", "Hibernate")]):
             b = QPushButton(label)
             b.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             b.setMinimumHeight(30)
-            b.setStyleSheet(_btn_css(c.TEXT))
+            b.setStyleSheet(ThemeManager.status_button_css("red"))
             b.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
             grid.addWidget(b, 0, i)
+            self.buttons[cmd] = b
 
         # Row 1: [ Enable ] [ Disable ]
-        for i, (cmd, label) in enumerate([("ENABLE_TELEMETRY", "Enable"), ("DISABLE_TELEMETRY", "Disable")]):
+        for i, (cmd, label) in enumerate([("ENABLE", "Enable"), ("DISABLE", "Disable")]):
             b = QPushButton(label)
             b.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             b.setMinimumHeight(30)
-            b.setStyleSheet(_btn_css(c.TEXT))
+            b.setStyleSheet(ThemeManager.status_button_css("red"))
             b.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
             grid.addWidget(b, 1, i)
+            self.buttons[cmd] = b
 
         self.layout.addLayout(grid)
 
@@ -405,6 +416,7 @@ class SequenceControlPanel(QWidget):
         self._last_cmd = "—"
         self._status = "Ready"
         self._buttons: List[QPushButton] = []
+        self.buttons: Dict[str, QPushButton] = {}
         self._enabled = True
         self._build()
 
@@ -434,49 +446,63 @@ class SequenceControlPanel(QWidget):
 
         self._btn_lock_all = QPushButton("LOCK ALL")
         self._btn_lock_all.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self._btn_lock_all.setStyleSheet(_btn_css(c.AMBER))
-        self._btn_lock_all.setToolTip("Transmit LOCK:ALL: Lock all servos to safe position (0°)")
+        self._btn_lock_all.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        self._btn_lock_all.setToolTip("Transmit LOCKALL: Lock all servos to safe position (0°)")
         self._btn_lock_all.clicked.connect(self._on_lock_all_clicked)
         self._buttons.append(self._btn_lock_all)
+        self.buttons["LOCKALL"] = self._btn_lock_all
         row1.addWidget(self._btn_lock_all)
 
         self._btn_reset = QPushButton("RESET")
         self._btn_reset.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self._btn_reset.setStyleSheet(_btn_css(c.RED))
-        self._btn_reset.setToolTip("Transmit RESET: Reset and lock all servos to 0°")
+        self._btn_reset.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        self._btn_reset.setToolTip("Transmit SEQRST: Reset and lock all servos to 0°")
         self._btn_reset.clicked.connect(self._on_reset_clicked)
         self._buttons.append(self._btn_reset)
+        self.buttons["SEQRST"] = self._btn_reset
         row1.addWidget(self._btn_reset)
 
         lay.addLayout(row1)
 
-        # Row 2: MANUAL SEQUENCE, NEXT SEQUENCE STEP, FULL SEQUENCE
+        # Row 2: MANUAL SEQUENCE, NEXT SEQUENCE STEP, FULL SEQUENCE, SEPARATION
         row2 = QHBoxLayout()
         row2.setSpacing(6)
 
         self._btn_manual_seq = QPushButton("MANUAL SEQUENCE")
         self._btn_manual_seq.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self._btn_manual_seq.setStyleSheet(_btn_css(c.CYAN))
-        self._btn_manual_seq.setToolTip("Transmit TEST5: Start manual sequence (Step 1: Door)")
+        self._btn_manual_seq.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        self._btn_manual_seq.setToolTip("Transmit MSEQ: Start manual sequence")
         self._btn_manual_seq.clicked.connect(self._on_manual_seq_clicked)
         self._buttons.append(self._btn_manual_seq)
+        self.buttons["MSEQ"] = self._btn_manual_seq
         row2.addWidget(self._btn_manual_seq)
 
         self._btn_next_step = QPushButton("NEXT SEQUENCE STEP")
         self._btn_next_step.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self._btn_next_step.setStyleSheet(_btn_css(c.CYAN))
-        self._btn_next_step.setToolTip("Transmit NEXT: Advance manual sequence to next step")
+        self._btn_next_step.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        self._btn_next_step.setToolTip("Transmit NSTEP: Advance manual sequence to next step (needs Arm)")
         self._btn_next_step.clicked.connect(self._on_next_step_clicked)
         self._buttons.append(self._btn_next_step)
+        self.buttons["NSTEP"] = self._btn_next_step
         row2.addWidget(self._btn_next_step)
 
         self._btn_full_seq = QPushButton("FULL SEQUENCE")
         self._btn_full_seq.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self._btn_full_seq.setStyleSheet(_btn_css(c.GREEN))
-        self._btn_full_seq.setToolTip("Transmit TEST6: Run full automatic 3-servo sequence")
+        self._btn_full_seq.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        self._btn_full_seq.setToolTip("Transmit FSEQ: Run full automatic 3-servo sequence (needs Arm + confirmation)")
         self._btn_full_seq.clicked.connect(self._on_full_seq_clicked)
         self._buttons.append(self._btn_full_seq)
+        self.buttons["FSEQ"] = self._btn_full_seq
         row2.addWidget(self._btn_full_seq)
+
+        self._btn_sep = QPushButton("SEPARATION")
+        self._btn_sep.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        self._btn_sep.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        self._btn_sep.setToolTip("Transmit SEP: Fire vehicle separation (needs Arm + confirmation)")
+        self._btn_sep.clicked.connect(self._on_sep_clicked)
+        self._buttons.append(self._btn_sep)
+        self.buttons["SEP"] = self._btn_sep
+        row2.addWidget(self._btn_sep)
 
         lay.addLayout(row2)
         self.refresh()
@@ -510,6 +536,9 @@ class SequenceControlPanel(QWidget):
 
     def _on_full_seq_clicked(self) -> None:
         self.command_requested.emit("FSEQ")
+
+    def _on_sep_clicked(self) -> None:
+        self.command_requested.emit("SEP")
 
     def note_command_sent(self, command: str) -> None:
         self._last_cmd = command
@@ -600,7 +629,9 @@ class CalibrationPanel(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         self._buttons: List[QPushButton] = []
+        self.buttons: Dict[str, QPushButton] = {}
         active_calibrations = [s for s in CALIBRATIONS if s.key in ("ALTITUDE", "IMU")]
+        key_map = {"ALTITUDE": "CALA", "IMU": "CALI"}
         for i, sensor in enumerate(active_calibrations):
             name = QLabel(sensor.label)
             name.setFont(QFont("monospace", 9))
@@ -615,21 +646,24 @@ class CalibrationPanel(QWidget):
             grid.addWidget(result, i, 1)
 
             b = QPushButton("Calibrate")
-            b.setFont(QFont("monospace", 8))
-            b.setStyleSheet(_btn_css(c.TEXT))
+            b.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+            b.setStyleSheet(ThemeManager.status_button_css("neutral"))
+            cmd_key = key_map.get(sensor.key, f"CALIBRATE_{sensor.key}")
             b.clicked.connect(
-                lambda _c, k=sensor.key:
-                self.command_requested.emit(f"CALIBRATE_{k}"))
+                lambda _c, k=cmd_key:
+                self.command_requested.emit(k))
             self._buttons.append(b)
+            self.buttons[cmd_key] = b
             grid.addWidget(b, i, 2)
         lay.addLayout(grid)
 
         self._all = QPushButton("Calibrate All")
         self._all.setFont(QFont("monospace", 9, QFont.Weight.Bold))
-        self._all.setStyleSheet(_btn_css(c.CYAN))
+        self._all.setStyleSheet(ThemeManager.status_button_css("neutral"))
         self._all.clicked.connect(
-            lambda: self.command_requested.emit("CALIBRATE_ALL"))
+            lambda: self.command_requested.emit("CAL"))
         self._buttons.append(self._all)
+        self.buttons["CAL"] = self._all
         lay.addWidget(self._all)
 
     def set_enabled_by_guard(self, enabled: bool) -> None:
@@ -651,6 +685,81 @@ class CalibrationPanel(QWidget):
             label.setText(outcome.value)
             label.setStyleSheet(f"color: {colour};")
             label.setToolTip(self.run.messages.get(key, ""))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Hardware Diagnostics & RF Control
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DiagnosticsPanel(QWidget):
+    """Real-time diagnostics and link control panel (PG, ST, LK, BITE, FPL, BZ, TX, GR, LR)."""
+
+    command_requested = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        c = ThemeManager.C()
+        self.setStyleSheet(
+            f"background-color: {c.BG_CARD}; border: 1px solid {c.BORDER}; "
+            f"border-radius: 6px;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(8)
+        lay.addWidget(_heading("Diagnostics & RF Control"))
+
+        self.buttons: Dict[str, QPushButton] = {}
+
+        # Row 1: Diagnostics [ Ping ] [ Status ] [ Link Check ] [ BITE ] [ Force Pre-Launch ]
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+
+        diag_cmds = [
+            ("PG", "Ping", "Ping rocket to establish two-way communication"),
+            ("ST", "Status", "Query vehicle system status"),
+            ("LK", "Link Check", "Check RF link quality and signal parameters"),
+            ("BITE", "BITE", "Run Built-In Test Equipment diagnostics"),
+            ("FPL", "Force Pre-Launch", "Force flight computer into PRE-LAUNCH state (needs Arm + confirm)"),
+        ]
+        for cmd, label, tip in diag_cmds:
+            btn = QPushButton(label)
+            btn.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+            btn.setStyleSheet(ThemeManager.status_button_css("neutral"))
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
+            self.buttons[cmd] = btn
+            row1.addWidget(btn)
+
+        lay.addLayout(row1)
+
+        # Row 2: RF & Peripheral Control [ Buzzer ON ] [ Buzzer OFF ] [ Rocket TX ON ] [ Rocket TX OFF ] [ GNSS Reset ] [ LoRa Reinit ]
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+
+        rf_cmds = [
+            ("BZ,1", "Buzzer ON", "Turn rocket audio beacon / buzzer ON"),
+            ("BZ,0", "Buzzer OFF", "Turn rocket audio beacon / buzzer OFF"),
+            ("TX,1", "Rocket TX ON", "Enable rocket LoRa transmission"),
+            ("TX,0", "Rocket TX OFF", "Silence rocket transmitter (receiver stays on)"),
+            ("GR", "GNSS Reset", "Reset / reinitialise rocket GNSS module"),
+            ("LR", "LoRa Reinit", "Reinitialise rocket LoRa radio transceiver"),
+        ]
+        for cmd, label, tip in rf_cmds:
+            btn = QPushButton(label)
+            btn.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+            btn.setStyleSheet(ThemeManager.status_button_css("neutral"))
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
+            self.buttons[cmd] = btn
+            row2.addWidget(btn)
+
+        lay.addLayout(row2)
+
+    def set_enabled_by_guard(self, enabled: bool) -> None:
+        for b in self.buttons.values():
+            b.setEnabled(enabled)
+
+    def refresh(self) -> None:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -792,6 +901,43 @@ class CommandPage(QWidget):
             "FREQ:CANSAT:ORIGINAL": "CanSat frequency set to Original",
             "FREQ:CANSAT:BACKUP": "CanSat frequency set to Backup",
             "REFRESH_PROCESSOR": "Refresh processor command sent",
+            "LOCK,0": "Door lock command sent (50°)",
+            "LOCK,1": "CanSat lock command sent (80°)",
+            "LOCK,2": "Separation lock command sent (80°)",
+            "UNLOCK,0": "Door unlock command sent (0°)",
+            "UNLOCK,1": "CanSat unlock command sent (0°)",
+            "UNLOCK,2": "Separation unlock command sent (0°)",
+            "SV,0,30": "Door 30° command sent",
+            "SV,0,60": "Door 60° command sent",
+            "SV,0,90": "Door 90° command sent",
+            "SV,1,30": "CanSat 30° command sent",
+            "SV,1,60": "CanSat 60° command sent",
+            "SV,1,90": "CanSat 90° command sent",
+            "SV,2,30": "Separation 30° command sent",
+            "SV,2,60": "Separation 60° command sent",
+            "SV,2,90": "Separation 90° command sent",
+            "FQ,0": "Rocket Original frequency (866.50 MHz) command sent",
+            "FQ,1": "Rocket Backup frequency (865.25 MHz) command sent",
+            "RF": "Refresh processor (RF) command sent",
+            "LIVE": "Live mode (SD) command sent",
+            "HIBERNATE": "Hibernate mode (XD) command sent",
+            "ENABLE": "LoRa Enable command sent",
+            "DISABLE": "LoRa Disable command sent",
+            "PG": "Ping (PG) command sent",
+            "ST": "Status query (ST) command sent",
+            "LK": "Link check (LK) command sent",
+            "BITE": "BITE diagnostic command sent",
+            "FPL": "Force Pre-Launch (FPL) command sent",
+            "BZ,1": "Buzzer ON command sent",
+            "BZ,0": "Buzzer OFF command sent",
+            "TX,1": "Rocket TX ON command sent",
+            "TX,0": "Rocket TX OFF command sent",
+            "GR": "GNSS Reset command sent",
+            "LR": "LoRa Reinit command sent",
+            "CALA": "Altitude calibration command sent",
+            "CALI": "IMU calibration command sent",
+            "CAL": "Calibrate All sensors command sent",
+            "SEP": "Separation (SEP) command sent",
         }
         return names.get(command, f"{command} command sent")
 
@@ -853,6 +999,22 @@ class CommandPage(QWidget):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
 
+        # Operator sequence banner (§6)
+        self._op_seq_banner = QFrame()
+        self._op_seq_banner.setStyleSheet(
+            f"QFrame {{ background-color: {c.BG_PANEL}; border: 1px solid {c.BORDER}; border-radius: 4px; }}"
+        )
+        op_lay = QHBoxLayout(self._op_seq_banner)
+        op_lay.setContentsMargins(10, 6, 10, 6)
+        op_text = QLabel(
+            "OPERATOR SEQUENCE:  1. Plug in ground Teensy → header CONNECTED (green)   "
+            "2. Enable (LoRa ON)   3. Ping (wake Rocket)   4. Live (telemetry flows)"
+        )
+        op_text.setFont(QFont("monospace", 8, QFont.Weight.Bold))
+        op_text.setStyleSheet(f"color: {c.CYAN}; border: none;")
+        op_lay.addWidget(op_text)
+        lay.addWidget(self._op_seq_banner)
+
         lay.addLayout(self._vehicle_selector())
 
         # Telemetry panel (containing 4 mode boxes, refresh processor, and frequency selectors)
@@ -883,6 +1045,10 @@ class CommandPage(QWidget):
         self.calibration_panel = CalibrationPanel(self.calibration[self.vehicle])
         self.calibration_panel.command_requested.connect(self._send_guarded)
         lay.addWidget(self.calibration_panel)
+
+        self.diagnostics_panel = DiagnosticsPanel()
+        self.diagnostics_panel.command_requested.connect(self._send_diagnostics_command)
+        lay.addWidget(self.diagnostics_panel)
 
         self.log_panel = CommandLogPanel(self.centre)
         self.log_panel.resend_requested.connect(self.centre.resend)
@@ -935,17 +1101,31 @@ class CommandPage(QWidget):
 
     def arm_rocket(self) -> None:
         self.centre.arm_rocket()
+        if self._backend_client:
+            self._backend_client.set_armed(True)
         self.refresh()
 
     def disarm_rocket(self) -> None:
         self.centre.disarm_rocket()
+        if self._backend_client:
+            self._backend_client.set_armed(False)
         self.refresh()
 
     def _toggle_rocket_arm(self) -> None:
-        if self.centre.is_rocket_armed():
-            self.disarm_rocket()
+        if self._backend_client:
+            current_armed = self._backend_client.state.get("armed", False)
+            new_armed = not current_armed
+            self._backend_client.set_armed(new_armed)
+            if new_armed:
+                self.centre.arm_rocket()
+            else:
+                self.centre.disarm_rocket()
+            self.refresh()
         else:
-            self.arm_rocket()
+            if self.centre.is_rocket_armed():
+                self.disarm_rocket()
+            else:
+                self.arm_rocket()
 
     def _setup_telemetry_commands(self, panel: ModePanel) -> None:
         c = ThemeManager.C()
@@ -960,17 +1140,18 @@ class CommandPage(QWidget):
         freq_grid.addWidget(rkt_capsule, 0, 0)
 
         self._rocket_freq_buttons: Dict[str, QPushButton] = {}
-        for i, (mode, label, freq_str) in enumerate([
-            ("ORIGINAL", "Original", "866.50 MHz (Main)"),
-            ("BACKUP", "Backup", "865.25 MHz (Backup)"),
+        for i, (mode, cmd, label, freq_str) in enumerate([
+            ("ORIGINAL", "FQ,0", "Original", "866.50 MHz (Main)"),
+            ("BACKUP", "FQ,1", "Backup", "865.25 MHz (Backup)"),
         ]):
             btn = QPushButton(label)
             btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             btn.setMinimumHeight(30)
-            btn.setCheckable(True)
+            btn.setStyleSheet(ThemeManager.status_button_css("red"))
             btn.setToolTip(f"Rocket telemetry frequency: {label} ({freq_str})")
-            btn.clicked.connect(lambda _c, m=mode: self._set_frequency(VehicleID.ROCKET, m))
+            btn.clicked.connect(lambda _c, c_cmd=cmd, m=mode: self._on_rocket_freq_clicked(c_cmd, m))
             self._rocket_freq_buttons[mode] = btn
+            self._rocket_freq_buttons[cmd] = btn
             freq_grid.addWidget(btn, 0, 1 + i)
 
         # Row 1: CanSat frequency [ CanSat ] [ Original ] [ Backup ]
@@ -978,36 +1159,32 @@ class CommandPage(QWidget):
         freq_grid.addWidget(cansat_capsule, 1, 0)
 
         self._cansat_freq_buttons: Dict[str, QPushButton] = {}
-        for i, (mode, label, freq_str) in enumerate([
-            ("ORIGINAL", "Original", "866.50 MHz (Main)"),
-            ("BACKUP", "Backup", "865.25 MHz (Backup)"),
+        for i, (mode, label) in enumerate([
+            ("ORIGINAL", "Original"),
+            ("BACKUP", "Backup"),
         ]):
             btn = QPushButton(label)
             btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             btn.setMinimumHeight(30)
-            btn.setCheckable(True)
-            btn.setToolTip(f"CanSat telemetry frequency: {label} ({freq_str})")
-            btn.clicked.connect(lambda _c, m=mode: self._set_frequency(VehicleID.CANSAT, m))
+            btn.setEnabled(False)
+            btn.setStyleSheet(ThemeManager.status_button_css("red"))
+            btn.setToolTip("CanSat link not implemented")
             self._cansat_freq_buttons[mode] = btn
+            self._cansat_freq_buttons[f"CANSAT_{mode}"] = btn
             freq_grid.addWidget(btn, 1, 1 + i)
 
         panel.layout.addLayout(freq_grid)
 
-        # ── Refresh Processor button (below frequency selectors) ────────────
         self._command_buttons: Dict[str, QPushButton] = {}
-        spec = COMMANDS["REFRESH_PROCESSOR"]
         b_ref = QPushButton("Refresh Processor")
         b_ref.setFont(QFont("monospace", 9, QFont.Weight.Bold))
         b_ref.setMinimumHeight(32)
-        b_ref.setStyleSheet(_btn_css(c.TEXT))
-        b_ref.setToolTip(f"{spec.description}")
+        b_ref.setStyleSheet(ThemeManager.status_button_css("neutral"))
+        b_ref.setToolTip("Software reset (reinitialise flight computer) — confirmation required")
         b_ref.clicked.connect(self._on_refresh_processor_clicked)
+        self._command_buttons["RF"] = b_ref
         self._command_buttons["REFRESH_PROCESSOR"] = b_ref
         panel.layout.addWidget(b_ref)
-
-        self._rocket_freq = "ORIGINAL"
-        self._cansat_freq = "ORIGINAL"
-        self._update_freq_styles()
 
     def _label_capsule(self, text: str) -> QFrame:
         c = ThemeManager.C()
@@ -1024,113 +1201,212 @@ class CommandPage(QWidget):
         lay.addWidget(lbl)
         return frame
 
-    def _freq_btn_css(self, checked: bool) -> str:
+    # ── Bridge Wiring & Button Status Handling ───────────────────────────
+
+    _backend_client: Optional[GroundStationBackendClient] = None
+
+    def set_backend_client(self, client: GroundStationBackendClient) -> None:
+        self._backend_client = client
+        client.buttons_changed.connect(self._on_backend_buttons_changed)
+        client.state_changed.connect(self._on_backend_state_changed)
+        if client.button_colors:
+            self._on_backend_buttons_changed({
+                "default": client.default_color,
+                "buttons": client.button_colors,
+                "tooltips": client.button_tooltips,
+            })
+        if client.state:
+            self._on_backend_state_changed(client.state)
+
+    def _collect_all_buttons(self) -> Dict[str, QPushButton]:
+        reg: Dict[str, QPushButton] = {}
+        if hasattr(self, "mode_panel"):
+            reg.update(self.mode_panel.buttons)
+        if hasattr(self, "_rocket_freq_buttons"):
+            reg.update(self._rocket_freq_buttons)
+        if hasattr(self, "_cansat_freq_buttons"):
+            reg.update(self._cansat_freq_buttons)
+        if hasattr(self, "_command_buttons"):
+            reg.update(self._command_buttons)
+        if hasattr(self, "actuator_panels"):
+            for p in self.actuator_panels.values():
+                reg.update(p.buttons)
+        if hasattr(self, "sequence_panel"):
+            reg.update(self.sequence_panel.buttons)
+        if hasattr(self, "calibration_panel"):
+            reg.update(self.calibration_panel.buttons)
+        if hasattr(self, "diagnostics_panel"):
+            reg.update(self.diagnostics_panel.buttons)
+        return reg
+
+    def _on_backend_buttons_changed(self, data: dict) -> None:
+        default_color = data.get("default", "neutral")
+        buttons = data.get("buttons", {})
+        tooltips = data.get("tooltips", {})
+
+        for key, btn in self._collect_all_buttons().items():
+            if btn is None:
+                continue
+            if "CANSAT" in key:
+                btn.setStyleSheet(ThemeManager.status_button_css("red"))
+                btn.setToolTip("CanSat link not implemented")
+                btn.setEnabled(False)
+                continue
+
+            color = buttons.get(key, default_color)
+            tip = tooltips.get(key, tooltips.get("default", ""))
+            btn.setStyleSheet(ThemeManager.status_button_css(color))
+            if tip:
+                btn.setToolTip(tip)
+
+    def _on_backend_state_changed(self, state: dict) -> None:
+        armed = state.get("armed", False)
         c = ThemeManager.C()
-        if checked:
-            return (f"QPushButton {{ background-color: #122840; color: {c.CYAN}; "
-                    f"border: 1px solid {c.CYAN}; border-radius: 4px; "
-                    f"padding: 6px 12px; font-weight: bold; }}"
-                    f"QPushButton:hover {{ background-color: #1a385c; }}")
-        else:
-            return (f"QPushButton {{ background-color: {c.BG_INPUT}; color: {c.TEXT_DIM}; "
-                    f"border: 1px solid {c.BORDER}; border-radius: 4px; "
-                    f"padding: 6px 12px; font-weight: bold; }}"
-                    f"QPushButton:hover {{ background-color: {c.BG_CARD_HOVER}; color: {c.TEXT}; border-color: {c.TEXT_DIM}; }}")
+        self._rocket_arm_btn.setText("Disarm" if armed else "Arm")
+        self._rocket_arm_btn.setStyleSheet(
+            ThemeManager.status_button_css("red", armed=armed) if armed else _btn_css(c.RED)
+        )
+        self._rocket_safety_label.setText("ARMED" if armed else "UNARMED")
+        self._rocket_safety_label.setStyleSheet(
+            f"color: {c.RED if armed else c.GREEN}; padding: 0 4px; font-weight: bold;"
+        )
 
-    def _update_freq_styles(self) -> None:
-        for mode, btn in getattr(self, "_rocket_freq_buttons", {}).items():
-            is_active = (mode == getattr(self, "_rocket_freq", "ORIGINAL"))
-            btn.setChecked(is_active)
-            btn.setStyleSheet(self._freq_btn_css(is_active))
+        target = state.get("target", "ROCKET")
+        for vid, b in getattr(self, "_vehicle_buttons", {}).items():
+            is_sel = (vid.value == target)
+            b.setChecked(is_sel)
+            if is_sel:
+                b.setStyleSheet(
+                    f"QPushButton {{ background-color: #122840; color: {c.CYAN}; border: 1px solid {c.CYAN}; "
+                    f"border-radius: 4px; padding: 6px 12px; font-weight: bold; }}"
+                )
+            else:
+                b.setStyleSheet(_btn_css(c.TEXT_DIM))
 
-        for mode, btn in getattr(self, "_cansat_freq_buttons", {}).items():
-            is_active = (mode == getattr(self, "_cansat_freq", "ORIGINAL"))
-            btn.setChecked(is_active)
-            btn.setStyleSheet(self._freq_btn_css(is_active))
+    def _send_command_via_bridge(self, cmd: str, key: Optional[str] = None) -> None:
+        key = key or cmd
+        if self._backend_client and self._backend_client.state.get("serial", {}).get("state") == "DISCONNECTED":
+            self.notice.emit(f"Cannot send {cmd}: Teensy disconnected")
+            self.refresh()
+            return
 
-    def _set_frequency(self, vid: VehicleID, mode: str) -> None:
-        hw_cmd = "FQ,0" if mode == "ORIGINAL" else "FQ,1"
-        freq_display = "866.50 MHz (Main)" if mode == "ORIGINAL" else "865.25 MHz (Backup)"
-        if vid == VehicleID.ROCKET:
-            self._rocket_freq = mode
-            self.centre.send(VehicleID.ROCKET, hw_cmd)
-            self.notice.emit(f"Rocket frequency set to {freq_display}")
-        else:
-            self._cansat_freq = mode
-            self.centre.send(VehicleID.CANSAT, hw_cmd)
-            self.notice.emit(f"CanSat frequency set to {freq_display}")
-        self._update_freq_styles()
+        rec = self.centre.send(self.vehicle, cmd)
+        # If CommandCentre._transmit is not wired to supervisor (e.g. standalone test without app.py),
+        # transmit directly via backend client with matching sequence number
+        is_dummy_transmit = getattr(self.centre._transmit, "__code__", None) == (lambda _t, _c, _s: None).__code__
+        if is_dummy_transmit and self._backend_client:
+            self._backend_client.send_command(cmd, key, seq=rec.sequence)
 
-    def _on_refresh_processor_clicked(self) -> None:
-        self.centre.send(self.vehicle, "REFRESH_PROCESSOR")
-        self.notice.emit("Refresh processor command sent")
-        self.refresh()
-
-    def _on_actuator_angle(self, actuator_id: str, angle: int) -> None:
-        cmd_prefix = {
-            "ACT_DOOR": "DOOR",
-            "ACT_DEPLOY": "CANSAT",
-            "ACT_SEPARATE": "SEPARATION",
-        }.get(actuator_id, "DOOR")
-        cmd = f"{cmd_prefix}:{angle}"
-        panel = self.actuator_panels.get(actuator_id)
-        if panel is not None:
-            panel.actuator.note_commanded(float(angle))
-            panel.set_last_command(cmd)
-        self.centre.send(VehicleID.ROCKET, cmd)
         msg = self._command_popup_text(cmd)
         self.notice.emit(msg)
         self.refresh()
 
+    def _on_rocket_freq_clicked(self, cmd: str, mode: str) -> None:
+        freq_str = "Original (866.50 MHz)" if mode == "ORIGINAL" else "Backup (865.25 MHz)"
+        reply = QMessageBox.question(
+            self,
+            "Confirm Frequency Switch",
+            f"Are you sure you want to switch Rocket and Ground radio frequency to {freq_str}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._send_command_via_bridge(cmd, key=cmd)
+
+    def _on_refresh_processor_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Confirm Processor Refresh",
+            "Are you sure you want to trigger a software restart of the Rocket processor (RF)?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._send_command_via_bridge("RF", key="RF")
+
+    def _on_dangerous_command_clicked(self, cmd: str) -> None:
+        if self._backend_client and not self._backend_client.state.get("armed", False):
+            QMessageBox.warning(
+                self,
+                "Command Rejected",
+                f"Command '{cmd}' requires the Rocket to be ARMED first.\n"
+                "Please click the 'Arm' button before executing dangerous commands."
+            )
+            return
+
+        confirm_text = {
+            "FSEQ": "Run FULL AUTOMATIC 3-SERVO SEQUENCE (Door -> CanSat -> Separation)?",
+            "SEP": "FIRE VEHICLE SEPARATION MECHANISM?",
+            "FPL": "FORCE PRE-LAUNCH FLIGHT STATE?",
+        }.get(cmd, f"Execute dangerous command {cmd}?")
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Destructive Command",
+            confirm_text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            if hasattr(self, "sequence_panel"):
+                self.sequence_panel.note_command_sent(cmd)
+            self._send_command_via_bridge(cmd, key=cmd)
+
+    def _send_diagnostics_command(self, cmd: str) -> None:
+        if cmd == "FPL":
+            self._on_dangerous_command_clicked("FPL")
+            return
+        self._send_command_via_bridge(cmd, key=cmd)
+
+    def _on_actuator_angle(self, actuator_id: str, angle: int) -> None:
+        ch_map = {"ACT_DOOR": 0, "ACT_DEPLOY": 1, "ACT_SEPARATE": 2}
+        ch = ch_map.get(actuator_id, 0)
+        cmd = f"SV,{ch},{angle}"
+        panel = self.actuator_panels.get(actuator_id)
+        if panel is not None:
+            panel.actuator.locked = False
+            panel.actuator.note_commanded(float(angle))
+            panel.set_last_command(cmd)
+        self._send_command_via_bridge(cmd, key=cmd)
+
     def _on_actuator_lock(self, actuator_id: str) -> None:
-        cmd_map = {
-            "ACT_DOOR": "LOCK:DOOR",
-            "ACT_DEPLOY": "LOCK:CANSAT",
-            "ACT_SEPARATE": "LOCK:SEPARATION",
-        }
+        ch_map = {"ACT_DOOR": 0, "ACT_DEPLOY": 1, "ACT_SEPARATE": 2}
+        ch = ch_map.get(actuator_id, 0)
+        cmd = f"LOCK,{ch}"
         lock_angles = {"ACT_DOOR": 50.0, "ACT_DEPLOY": 80.0, "ACT_SEPARATE": 80.0}
-        cmd = cmd_map.get(actuator_id, "LOCK:DOOR")
         angle = lock_angles.get(actuator_id, 0.0)
         panel = self.actuator_panels.get(actuator_id)
         if panel is not None:
             panel.actuator.locked = True
             panel.actuator.note_commanded(angle)
             panel.set_last_command(cmd)
-        self.centre.send(VehicleID.ROCKET, cmd)
-        msg = self._command_popup_text(cmd)
-        self.notice.emit(msg)
-        self.refresh()
+        self._send_command_via_bridge(cmd, key=cmd)
 
     def _on_actuator_unlock(self, actuator_id: str) -> None:
-        cmd_map = {
-            "ACT_DOOR": "UNLOCK:DOOR",
-            "ACT_DEPLOY": "UNLOCK:CANSAT",
-            "ACT_SEPARATE": "UNLOCK:SEPARATION",
-        }
-        cmd = cmd_map.get(actuator_id, "UNLOCK:DOOR")
+        ch_map = {"ACT_DOOR": 0, "ACT_DEPLOY": 1, "ACT_SEPARATE": 2}
+        ch = ch_map.get(actuator_id, 0)
+        cmd = f"UNLOCK,{ch}"
         panel = self.actuator_panels.get(actuator_id)
         if panel is not None:
             panel.actuator.locked = False
             panel.actuator.note_commanded(0.0)
             panel.set_last_command(cmd)
-        self.centre.send(VehicleID.ROCKET, cmd)
-        name_map = {"ACT_DOOR": "Door", "ACT_DEPLOY": "CanSat", "ACT_SEPARATE": "Separation"}
-        self.notice.emit(f"{name_map.get(actuator_id, 'Actuator')} unlock (0°) command sent")
-        self.refresh()
+        self._send_command_via_bridge(cmd, key=cmd)
 
     def _send_actuator_command(self, actuator_id: str, command: str) -> None:
         panel = self.actuator_panels.get(actuator_id)
         if panel is not None:
             panel.set_last_command(command)
         self.sequence_panel.note_command_sent(command)
-        self.centre.send(VehicleID.ROCKET, command)
-        msg = self._command_popup_text(command)
-        self.notice.emit(msg)
-        self.refresh()
+        self._send_command_via_bridge(command, key=command)
 
     def _send_sequence_command(self, command: str) -> None:
-        self.sequence_panel.note_command_sent(command)
         cmd_u = command.upper()
+        if cmd_u in ("FSEQ", "SEP"):
+            self._on_dangerous_command_clicked(cmd_u)
+            return
+
+        self.sequence_panel.note_command_sent(command)
         if cmd_u in ("LOCKALL", "LOCK:ALL", "TEST4"):
             lock_angles = {"ACT_DOOR": 50.0, "ACT_DEPLOY": 80.0, "ACT_SEPARATE": 80.0}
             for sid, p in self.actuator_panels.items():
@@ -1168,59 +1444,33 @@ class CommandPage(QWidget):
                 if p:
                     p.actuator.note_commanded(0.0)
                     p.set_last_command("NSTEP")
-        elif cmd_u in ("FSEQ", "TEST6"):
-            for p in self.actuator_panels.values():
-                p.actuator.note_commanded(0.0)
-                p.set_last_command("FSEQ")
 
-        self.centre.send(VehicleID.ROCKET, command)
-        msg = self._command_popup_text(command)
-        self.notice.emit(msg)
-        self.refresh()
-
-    # ── sending ──────────────────────────────────────────────────────────
+        self._send_command_via_bridge(command, key=command)
 
     def _select_vehicle(self, vid: VehicleID) -> None:
         self.vehicle = vid
+        c = ThemeManager.C()
         for v, b in self._vehicle_buttons.items():
-            b.setChecked(v is vid)
+            is_sel = (v is vid)
+            b.setChecked(is_sel)
+            if is_sel:
+                b.setStyleSheet(
+                    f"QPushButton {{ background-color: #122840; color: {c.CYAN}; border: 1px solid {c.CYAN}; "
+                    f"border-radius: 4px; padding: 6px 12px; font-weight: bold; }}"
+                )
+            else:
+                b.setStyleSheet(_btn_css(c.TEXT_DIM))
+        if self._backend_client:
+            self._backend_client.set_target(vid.value)
         self.mode_panel.modes = self.centre.modes[vid]
         self.calibration_panel.run = self.calibration[vid]
         self.refresh()
 
     def _send_guarded(self, command: str) -> None:
-        base = command.split()[0]
-        spec = COMMANDS.get(base)
-        if spec is None:
-            # Unknown command — refuse rather than borrowing another
-            # command's guard.  Every command that should be sendable must
-            # be registered in commands.COMMANDS with the correct Guard.
-            self._guard_note.setText(
-                f"Unknown command {base!r} — not in the command set")
-            return
-        result = check_guard(spec, self._states[self.vehicle],
-                             self._links[self.vehicle], self.simulator_mode,
-                             self._usb_direct)
-        if not result.allowed:
-            self._guard_note.setText(result.reason)
-            return
-        self._guard_note.setText("")
-        self.centre.send(self.vehicle, command)
-        self.refresh()
+        self._send_command_via_bridge(command, key=command)
 
     def _send_mode_command(self, command: str) -> None:
-        record = self.centre.send(self.vehicle, command)
-        if record is None:
-            return
-        # §10.4 — the mode goes to PENDING here and only becomes the
-        # requested value when the vehicle acknowledges this exact
-        # sequence. Never flip optimistically.
-        modes = self.centre.modes[self.vehicle]
-        if command.startswith("SET_MODE"):
-            modes.request_sampling(command, record.sequence)
-        else:
-            modes.request_telemetry(command, record.sequence)
-        self.refresh()
+        self._send_command_via_bridge(command, key=command)
 
     def _send_move(self, actuator_id: str, delta: float) -> None:
         actuator = self.actuators[actuator_id]
@@ -1422,9 +1672,17 @@ class CommandPage(QWidget):
             "RF": ["REFRESH_PROCESSOR", "RF"],
             "FQ": ["FQ,0", "FQ,1", "FREQ:ROCKET:ORIGINAL", "FREQ:ROCKET:BACKUP"],
             "TX": ["TX,0", "TX,1"],
-            "PG": ["PG"],
+            "PG": ["PG", "PING"],
             "BZ": ["BZ,0", "BZ,1"],
             "FPL": ["FPL", "FPL,1"],
+            "SEP": ["SEP", "ACT_SEPARATE", "MANUAL_DEPLOY", "SEPARATION"],
+            "LK": ["LK", "LINK_CHECK"],
+            "ST": ["ST", "REQUEST_STATUS", "STATUS"],
+            "GR": ["GR", "GNSS_RESET"],
+            "LR": ["LR", "LORA_RESET", "LORA_REINIT"],
+            "ENABLE": ["ENABLE", "LINK", "ENABLE_TELEMETRY"],
+            "DISABLE": ["DISABLE", "DISABLE_TELEMETRY"],
+            "GS": ["GS", "GROUND_STATUS"],
         }
         aliases = alias_groups.get(cmd_u, [cmd_u])
 

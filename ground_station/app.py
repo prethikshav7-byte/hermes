@@ -196,6 +196,35 @@ class MachZoneHeader(QWidget):
         self.pill_port.setText(f"PORT: {port}")
         self.pill_baud.setText(f"Baud {baud}")
 
+    def set_bridge_state(self, state: dict) -> None:
+        serial_info = state.get("serial", {})
+        s_state = serial_info.get("state", "DISCONNECTED").upper()
+        port = serial_info.get("port", "—")
+        info = serial_info.get("info", "")
+
+        c = ThemeManager.C()
+        if s_state == "CONNECTED":
+            colour = c.GREEN
+            text = "CONNECTED"
+        elif s_state == "CONNECTING":
+            colour = c.AMBER
+            text = "CONNECTING"
+        else:
+            colour = c.RED
+            text = "DISCONNECTED"
+
+        self.pill_status.setText(f"● {text}")
+        self.pill_status.setStyleSheet(
+            f"background-color: rgba(13, 26, 40, 0.85); color: {colour}; "
+            f"border: 1px solid {colour}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
+        )
+        self.pill_status.setToolTip(info)
+
+        self.pill_port.setText(f"PORT: {port}")
+        self.pill_port.setToolTip(info)
+        self.pill_baud.setText("Baud 115200")
+        self.pill_baud.setToolTip("Fixed link baud rate: 115200 bps")
+
 
 class SidebarFooter(QWidget):
     """Bottom slogan badge with subtle aerospace accent."""
@@ -463,8 +492,21 @@ class GroundStationApp(QMainWindow):
         if hasattr(supervisor, "servo_report"):
             supervisor.servo_report.connect(self.command_page.handle_servo_report)
         self._supervisor = supervisor
+        if hasattr(supervisor, "raw_line"):
+            supervisor.raw_line.connect(lambda line, _t: self.com_page.append_raw_line(line))
         self.com_page.set_supervisor(supervisor)
         self.header.update_supervisor_info(supervisor)
+
+        if hasattr(supervisor, "client"):
+            client = supervisor.client
+            client.state_changed.connect(self.header.set_bridge_state)
+            if hasattr(self.command_page, "set_backend_client"):
+                self.command_page.set_backend_client(client)
+            if hasattr(self.com_page, "set_backend_client"):
+                self.com_page.set_backend_client(client)
+            if client.state:
+                self.header.set_bridge_state(client.state)
+
         # §1.4 — the only place a transmit path is installed, installed
         # once. Nothing in the app calls send() on a timer; every call
         # originates in a widget's clicked handler.

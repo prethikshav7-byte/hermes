@@ -1,5 +1,8 @@
 # Session logs
 logs/
+logs_test/
+backend/logs_test/
+scratch/
 
 # Python
 __pycache__/

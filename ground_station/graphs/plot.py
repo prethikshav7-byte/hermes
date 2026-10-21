@@ -589,12 +589,10 @@ class TelemetryGraph(QWidget):
             if tier is LossTier.OUTAGE:
                 self._outage.open_outage(last_x, last_y, self._state_now,
                                          v_entry=self._v_entry)
-            elif tier is LossTier.GAP:
+            elif tier in (LossTier.GAP, LossTier.DROPOUT):
                 # §7.5.2 — break the line, no interpolation, marked
                 # subtly. Recorded so the renderer can split the curve.
                 self._outage.note_break(last_x, x)
-            # DROPOUT connects straight across as a normal line with no
-            # annotation, so there is deliberately nothing to do here.
 
         buf.append(x, y)
         self._latest_x = max(self._latest_x, x)

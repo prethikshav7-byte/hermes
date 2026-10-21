@@ -114,6 +114,67 @@ class ThemeManager:
         """
 
     @classmethod
+    def status_button_css(cls, color: str = "neutral", armed: bool = False) -> str:
+        """Dynamic styling for buttons responding to ground station state.
+        Classes: green, yellow, red, neutral, and armed state.
+        """
+        c = cls._palette
+        color = (color or "neutral").lower()
+        if armed:
+            return (
+                "QPushButton {"
+                "  background-color: #ef4444; color: #ffffff;"
+                "  border: 2px solid #ff2a2a; border-radius: 4px;"
+                "  padding: 6px 12px; font-weight: bold;"
+                "}"
+                "QPushButton:hover { background-color: #dc2626; }"
+                "QPushButton:disabled { background-color: #1a2638; color: #475569; border-color: #1a2638; }"
+            )
+        if color == "green":
+            border_c = "#10b981"
+            bg_c = "rgba(16, 185, 129, 0.15)"
+            text_c = "#10b981"
+            hover_bg = "rgba(16, 185, 129, 0.25)"
+            hover_text = "#10b981"
+            hover_border = "#10b981"
+        elif color == "yellow":
+            border_c = "#f59e0b"
+            bg_c = "rgba(245, 158, 11, 0.15)"
+            text_c = "#f59e0b"
+            hover_bg = "rgba(245, 158, 11, 0.25)"
+            hover_text = "#f59e0b"
+            hover_border = "#f59e0b"
+        elif color == "neutral":
+            border_c = "#24364f"
+            bg_c = "#111a28"
+            text_c = "#94a3b8"
+            hover_bg = "#1a2638"
+            hover_text = "#f1f5f9"
+            hover_border = "#38bdf8"
+        else:  # red
+            border_c = "#ef4444"
+            bg_c = "rgba(239, 68, 68, 0.15)"
+            text_c = "#ef4444"
+            hover_bg = "rgba(239, 68, 68, 0.25)"
+            hover_text = "#ef4444"
+            hover_border = "#ef4444"
+
+        return (
+            f"QPushButton {{"
+            f"  background-color: {bg_c}; color: {text_c};"
+            f"  border: 1px solid {border_c}; border-radius: 4px;"
+            f"  padding: 6px 12px; font-weight: bold;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background-color: {hover_bg}; color: {hover_text}; border-color: {hover_border};"
+            f"}}"
+            f"QPushButton:disabled {{"
+            f"  background-color: #121822; color: #475569;"
+            f"  border: 1px solid #1a2638;"
+            f"}}"
+        )
+
+    @classmethod
     def graph_button_stylesheet(cls) -> str:
         """Stylesheet for the graph controls toolbar (reset, zoom in, zoom out)."""
         c = cls._palette

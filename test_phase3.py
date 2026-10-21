@@ -352,7 +352,7 @@ check("actual 0.0 is reported correctly (not falsy-None)",
       pos == 0.0 and pos is not None)
 # The new _send_move logic: use actuator.position directly (never `or home`).
 target_correct = act_door.position + 45.0
-check("+45° from 0° → 45°, not 225°", target_correct == 45.0)
+check("+45 deg from 0 deg -> 45 deg, not 225 deg", target_correct == 45.0)
 # When position is None, the move must be refused outright.
 act_door2 = Actuator(BY_ID["ACT_DOOR"])
 check("position is None before first echo", act_door2.position is None)

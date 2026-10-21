@@ -1,0 +1,80 @@
+/*
+ * frontend/gsButtons.css
+ * Ground Station button status color styles (.gs-green, .gs-yellow, .gs-red)
+ */
+
+:root {
+  --gs-green: #10b981;
+  --gs-green-bg: rgba(16, 185, 129, 0.15);
+  --gs-yellow: #f59e0b;
+  --gs-yellow-bg: rgba(245, 158, 11, 0.15);
+  --gs-red: #ef4444;
+  --gs-red-bg: rgba(239, 68, 68, 0.15);
+  --gs-border: #1e293b;
+  --gs-card: #0d1520;
+}
+
+.gs-btn {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  outline: none;
+  background-color: var(--gs-card);
+  color: #e2e8f0;
+  border: 1px solid var(--gs-border);
+  position: relative;
+}
+
+.gs-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Green status */
+.gs-green,
+button.gs-green {
+  border-color: var(--gs-green) !important;
+  color: var(--gs-green) !important;
+  background-color: var(--gs-green-bg) !important;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.2);
+}
+
+/* Yellow status */
+.gs-yellow,
+button.gs-yellow {
+  border-color: var(--gs-yellow) !important;
+  color: var(--gs-yellow) !important;
+  background-color: var(--gs-yellow-bg) !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
+  animation: gs-pulse 1.5s infinite alternate ease-in-out;
+}
+
+/* Red status */
+.gs-red,
+button.gs-red {
+  border-color: var(--gs-red) !important;
+  color: var(--gs-red) !important;
+  background-color: var(--gs-red-bg) !important;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.2);
+}
+
+/* Armed indicator */
+.gs-armed {
+  background-color: var(--gs-red) !important;
+  color: #ffffff !important;
+  border-color: #ff2a2a !important;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.5) !important;
+}
+
+@keyframes gs-pulse {
+  from {
+    opacity: 0.75;
+  }
+  to {
+    opacity: 1.0;
+  }
+}
