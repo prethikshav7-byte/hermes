@@ -61,13 +61,6 @@ class SectionBanner(QWidget):
         )
         row.addWidget(line, stretch=1)
 
-        # Right realtime telemetry badge
-        sub_text = "TELEMETRY · REALTIME" if vid is VehicleID.ROCKET else "CANSAT TELEMETRY · REALTIME"
-        right_lbl = QLabel(sub_text)
-        right_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
-        right_lbl.setStyleSheet(f"color: {c.TEXT_DIM}; letter-spacing: 1.5px;")
-        row.addWidget(right_lbl)
-
 
 class OverviewPage(QWidget):
     """§6.2 + §6.5."""

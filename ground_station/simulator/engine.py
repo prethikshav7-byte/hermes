@@ -148,7 +148,7 @@ class SimulatedFlight:
         self.packet_count += 1
 
         mm, ss = int((t % 3600) // 60), t % 60
-        accel_mag = math.sqrt(ax**2 + ay**2 + az**2)
+        accel_mag = math.sqrt(ax**2 + ay**2 + az**2) * 9.80665
         vel = self.velocity_at(t)
         return {
             "team_id": TEAM_ID, "vehicle_id": self.vehicle,

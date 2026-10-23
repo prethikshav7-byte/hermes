@@ -32,40 +32,64 @@ class GroundStationScrollArea(QScrollArea):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setFrameShape(QScrollArea.Shape.NoFrame)
         self.verticalScrollBar().setSingleStep(self.WHEEL_STEP_PX)
+        self.horizontalScrollBar().setSingleStep(self.WHEEL_STEP_PX)
         self.viewport().setAutoFillBackground(False)
         self.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
     def wheelEvent(self, ev: QWheelEvent) -> None:
-        """Handle wheel and touchpad events with zero delay."""
+        """Handle wheel and touchpad events with zero delay for both vertical and horizontal directions."""
         # 1. Precision touchpad gestures provide pixelDelta (e.g. Windows Precision / macOS)
         p_delta = ev.pixelDelta()
-        if not p_delta.isNull() and p_delta.y() != 0:
-            vbar = self.verticalScrollBar()
-            vbar.setValue(vbar.value() - p_delta.y())
-            ev.accept()
-            return
+        if not p_delta.isNull():
+            handled = False
+            if p_delta.y() != 0:
+                vbar = self.verticalScrollBar()
+                vbar.setValue(vbar.value() - p_delta.y())
+                handled = True
+            if p_delta.x() != 0:
+                hbar = self.horizontalScrollBar()
+                hbar.setValue(hbar.value() - p_delta.x())
+                handled = True
+            if handled:
+                ev.accept()
+                return
 
         # 2. Standard mouse wheel notches provide angleDelta (120 units per notch)
         a_delta = ev.angleDelta()
-        if not a_delta.isNull() and a_delta.y() != 0:
-            vbar = self.verticalScrollBar()
-            steps = a_delta.y() / 120.0
-            delta_px = int(steps * self.WHEEL_STEP_PX)
-            vbar.setValue(vbar.value() - delta_px)
-            ev.accept()
-            return
+        if not a_delta.isNull():
+            # If Shift is pressed or horizontal delta is dominant, scroll horizontally
+            if (ev.modifiers() & Qt.KeyboardModifier.ShiftModifier) or (a_delta.x() != 0 and abs(a_delta.x()) > abs(a_delta.y())):
+                hbar = self.horizontalScrollBar()
+                dx = a_delta.x() if a_delta.x() != 0 else a_delta.y()
+                steps = dx / 120.0
+                delta_px = int(steps * self.WHEEL_STEP_PX)
+                hbar.setValue(hbar.value() - delta_px)
+                ev.accept()
+                return
+            elif a_delta.y() != 0:
+                vbar = self.verticalScrollBar()
+                steps = a_delta.y() / 120.0
+                delta_px = int(steps * self.WHEEL_STEP_PX)
+                vbar.setValue(vbar.value() - delta_px)
+                ev.accept()
+                return
 
         super().wheelEvent(ev)
 
     def attach_child_wheel_passthrough(self, child: QWidget) -> None:
-        """Install an event filter on a nested scrollable or input widget so that
-        wheel events that reach boundary conditions propagate to this main page scroll area.
+        """Install an event filter on a nested scrollable, plot, or input widget so that
+        wheel events propagate seamlessly to this main page scroll area.
         """
-        child.installEventFilter(_ChildWheelFilter(self, child))
+        filter_obj = _ChildWheelFilter(self, child)
+        child.installEventFilter(filter_obj)
+        if hasattr(child, "viewport") and callable(child.viewport):
+            vp = child.viewport()
+            if vp is not None:
+                vp.installEventFilter(filter_obj)
 
 
 class _ChildWheelFilter(QObject):
@@ -82,7 +106,6 @@ class _ChildWheelFilter(QObject):
             if isinstance(self.target, QAbstractScrollArea):
                 vbar = self.target.verticalScrollBar()
                 dy = event.angleDelta().y() or event.pixelDelta().y()
-                # If cannot scroll further up or down, pass event to parent
                 at_top = vbar.value() <= vbar.minimum() and dy > 0
                 at_bottom = vbar.value() >= vbar.maximum() and dy < 0
                 not_scrollable = vbar.maximum() <= vbar.minimum()
@@ -90,4 +113,7 @@ class _ChildWheelFilter(QObject):
                 if at_top or at_bottom or not_scrollable:
                     self.parent_scroll.wheelEvent(event)
                     return True
+            else:
+                self.parent_scroll.wheelEvent(event)
+                return True
         return super().eventFilter(watched, event)

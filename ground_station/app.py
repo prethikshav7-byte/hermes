@@ -38,6 +38,7 @@ from .parser import IngestResult
 from .commands import CommandCentre
 from .pages.command import CommandPage
 from .pages.com import ComPage
+from .pages.csv_page import CsvPage
 from .pages.experiment import ExperimentPage
 from .pages.overview import OverviewPage
 from .pages.vehicle import VehiclePage
@@ -117,17 +118,24 @@ class MachZoneHeader(QWidget):
         row.addStretch(1)
 
         # Connection Pill
-        init_status = "● SIMULATOR" if simulator_mode else "● CONNECTED"
+        if simulator_mode:
+            init_status = "● SIMULATOR"
+            init_color = c.CYAN
+            port_text = "SIM"
+        else:
+            init_status = "● DISCONNECTED"
+            init_color = c.RED
+            port_text = "—"
+
         self.pill_status = QLabel(init_status)
         self.pill_status.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         self.pill_status.setStyleSheet(
-            f"background-color: rgba(13, 26, 40, 0.85); color: {c.CYAN if simulator_mode else c.GREEN}; "
-            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
+            f"background-color: rgba(13, 26, 40, 0.85); color: {init_color}; "
+            f"border: 1px solid {init_color if not simulator_mode else c.BORDER}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
         )
         row.addWidget(self.pill_status)
 
-        # COM Port Pill
-        port_text = "SIM" if simulator_mode else "COM9"
+        # Port Pill
         self.pill_port = QLabel(f"PORT: {port_text}")
         self.pill_port.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
         self.pill_port.setStyleSheet(
@@ -182,12 +190,12 @@ class MachZoneHeader(QWidget):
             SourceState.CONNECTING: c.AMBER,
             SourceState.NO_DATA: c.AMBER,
             SourceState.LINK_ERROR: c.RED,
-            SourceState.DISCONNECTED: c.TEXT_MUTED,
-        }.get(state, c.TEXT_MUTED)
+            SourceState.DISCONNECTED: c.RED,
+        }.get(state, c.RED)
         self.pill_status.setText(f"● {state.value}")
         self.pill_status.setStyleSheet(
             f"background-color: rgba(13, 26, 40, 0.85); color: {colour}; "
-            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
+            f"border: 1px solid {colour}; border-radius: 4px; padding: 4px 10px; letter-spacing: 0.5px;"
         )
 
     def update_supervisor_info(self, supervisor) -> None:
@@ -351,6 +359,7 @@ class GroundStationApp(QMainWindow):
         self.command_page.notice.connect(self._on_notice)
         self.experiment_page = ExperimentPage()
         self.com_page = ComPage()
+        self.csv_page = CsvPage()
 
         self._build(mode_label)
 
@@ -407,6 +416,7 @@ class GroundStationApp(QMainWindow):
         self.stack.addWidget(self.command_page)
         self.stack.addWidget(self.experiment_page)
         self.stack.addWidget(self.com_page)
+        self.stack.addWidget(self.csv_page)
         main_lay.addWidget(self.stack, stretch=1)
 
         row.addWidget(main_area, stretch=1)
@@ -453,7 +463,8 @@ class GroundStationApp(QMainWindow):
             ("CanSat", 2, True),
             ("Command", 3, True),
             ("CanSat Experiment", 4, True),
-            ("COM", 5, True),
+            ("DEV", 5, True),
+            ("CSV", 6, True),
         ]
         for text, index, enabled in entries:
             b = NavButton(text)
@@ -545,6 +556,8 @@ class GroundStationApp(QMainWindow):
         v = page.receive(packet, result)
         self.overview_page.receive(packet, result, v)
         self.com_page.receive(packet, result, v)
+        self.csv_page.receive_packet(packet, result, v)
+        self.experiment_page.receive_packet(packet, result)
 
         if self._supervisor is not None:
             stream = self._supervisor.demux.streams[vid]

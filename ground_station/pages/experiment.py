@@ -127,10 +127,7 @@ class RetrievalPanel(QWidget):
         lay.addWidget(_heading("Retrieve Experiment Data"))
 
         self._why = QLabel("")
-        self._why.setFont(QFont("monospace", 8))
-        self._why.setStyleSheet(f"color: {c.AMBER};")
-        self._why.setWordWrap(True)
-        lay.addWidget(self._why)
+        self._why.setVisible(False)
 
         row = QHBoxLayout()
         self._list_button = QPushButton("List Files")
@@ -216,8 +213,10 @@ class RetrievalPanel(QWidget):
         self._list_button.setEnabled(ok)
         self._get_button.setEnabled(ok and self._files.count() > 0)
         self._files.setEnabled(ok)
-        self._why.setText(why)
-        self._why.setVisible(bool(why))
+        self._list_button.setToolTip(why if not ok else "List files on recovered CanSat")
+        self._get_button.setToolTip(why if not ok else "Retrieve selected file")
+        self._why.setText("")
+        self._why.setVisible(False)
 
     # ── transfer (§11.5) ─────────────────────────────────────────────────
 
@@ -290,6 +289,7 @@ class ExperimentPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.dataset: Optional[ExperimentDataset] = None
+        self._live_dataset: Optional[ExperimentDataset] = None
         self._worker: Optional[ParseWorker] = None
         self._build()
 
@@ -300,7 +300,12 @@ class ExperimentPage(QWidget):
         outer.setSpacing(0)
 
         scroll = GroundStationScrollArea()
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         body = QWidget()
+        body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        body.setMinimumSize(850, 780)
         lay = QVBoxLayout(body)
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
@@ -319,37 +324,95 @@ class ExperimentPage(QWidget):
         lay.addWidget(self._file_panel())
 
         split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        split.setMinimumSize(780, 500)
 
         left = QWidget()
+        left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        left.setMinimumSize(500, 480)
         left_lay = QVBoxLayout(left)
         left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(6)
         self.profile = AerosolProfilePlot()
-        self.profile.setMinimumHeight(340)
+        self.profile.setMinimumSize(450, 280)
+        self.profile.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_lay.addWidget(self._plot_controls())
         left_lay.addWidget(self.profile, stretch=1)
 
         secondaries = QWidget()
+        secondaries.setMinimumHeight(180)
+        secondaries.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         sec_lay = QHBoxLayout(secondaries)
         sec_lay.setContentsMargins(0, 0, 0, 0)
+        sec_lay.setSpacing(8)
         self.alt_time = SecondaryPlot("altitude")
         self.aero_time = SecondaryPlot("aerosol")
         for p in (self.alt_time, self.aero_time):
-            p.setMinimumHeight(180)
+            p.setMinimumSize(220, 160)
+            p.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             sec_lay.addWidget(p)
         left_lay.addWidget(secondaries)
 
         split.addWidget(left)
         report_widget = self._report_panel()
+        report_widget.setMinimumSize(220, 200)
         split.addWidget(report_widget)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 1)
         lay.addWidget(split, stretch=1)
 
+        # Connect nested wheel passthrough so wheel scrolling anywhere over the plots scrolls the page
+        scroll.attach_child_wheel_passthrough(self.profile.plot)
+        scroll.attach_child_wheel_passthrough(self.alt_time.plot)
+        scroll.attach_child_wheel_passthrough(self.aero_time.plot)
         if hasattr(self, "_report_scroll"):
             scroll.attach_child_wheel_passthrough(self._report_scroll)
 
         scroll.setWidget(body)
         outer.addWidget(scroll)
+
+    def receive_packet(self, packet, result=None) -> None:
+        """Receive incoming telemetry / simulation packet to update CanSat experiment plots in real-time."""
+        vid = getattr(packet, "vehicle_id", None)
+        # Check for CANSAT vehicle
+        vid_val = getattr(vid, "value", str(vid)) if vid is not None else ""
+        if vid_val != "CANSAT":
+            return
+
+        t = float(getattr(packet, "mission_time", 0.0) or 0.0)
+        alt = float(getattr(packet, "altitude", 0.0) or 0.0)
+
+        # Check if aerosol reading is present in extras or derive plausible sensor value
+        aero = 0.0
+        extras = getattr(packet, "extras", {}) or {}
+        if "aerosol" in extras:
+            try:
+                aero = float(extras["aerosol"])
+            except (ValueError, TypeError):
+                aero = 0.0
+        elif hasattr(packet, "aerosol") and packet.aerosol is not None:
+            aero = float(packet.aerosol)
+        else:
+            aero = max(0.0, round(50.0 + (alt * 0.12), 1))
+
+        if self._live_dataset is None:
+            from ..experiment.parser import ParseReport
+            report = ParseReport(path="[LIVE TELEMETRY STREAM]")
+            self._live_dataset = ExperimentDataset(mission_time=[], altitude=[], aerosol=[], report=report)
+            if self.dataset is None:
+                self.dataset = self._live_dataset
+
+        self._live_dataset.mission_time.append(t)
+        self._live_dataset.altitude.append(alt)
+        self._live_dataset.aerosol.append(aero)
+        self._live_dataset.report.rows_accepted = len(self._live_dataset.mission_time)
+        self._live_dataset.report.rows_read = len(self._live_dataset.mission_time)
+
+        if self.dataset is self._live_dataset:
+            self.profile.set_dataset(self._live_dataset)
+            self.alt_time.set_dataset(self._live_dataset)
+            self.aero_time.set_dataset(self._live_dataset)
 
     def _file_panel(self) -> QWidget:
         c = ThemeManager.C()
@@ -422,7 +485,7 @@ class ExperimentPage(QWidget):
 
         # §11.10 — axis-swap toggle, defaulting to the specified
         # orientation (aerosol on y, altitude on x).
-        self._swap = QCheckBox("Altitude on Y (conventional profile)")
+        self._swap = QCheckBox("Altitude on Y")
         self._swap.setFont(QFont("monospace", 8))
         self._swap.setStyleSheet(f"color: {c.TEXT};")
         self._swap.stateChanged.connect(

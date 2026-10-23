@@ -35,7 +35,7 @@ except ImportError:
 from protocol import decode_line, parse_telemetry, STATE_NAMES
 
 ARM_TIMEOUT_S = 120.0
-BUTTON_OK_HOLD_S = 8.0
+BUTTON_OK_HOLD_S = 2.0
 BUTTON_FAILED_HOLD_S = 4.0
 TELEM_TIMEOUT_S = 2.5
 CMD_TIMEOUT_S = 18.0

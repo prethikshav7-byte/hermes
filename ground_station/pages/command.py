@@ -379,7 +379,7 @@ class ModePanel(QWidget):
             b = QPushButton(label)
             b.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             b.setMinimumHeight(30)
-            b.setStyleSheet(ThemeManager.status_button_css("red"))
+            b.setStyleSheet(ThemeManager.status_button_css("neutral"))
             b.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
             grid.addWidget(b, 0, i)
             self.buttons[cmd] = b
@@ -389,7 +389,7 @@ class ModePanel(QWidget):
             b = QPushButton(label)
             b.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             b.setMinimumHeight(30)
-            b.setStyleSheet(ThemeManager.status_button_css("red"))
+            b.setStyleSheet(ThemeManager.status_button_css("neutral"))
             b.clicked.connect(lambda _c, x=cmd: self.command_requested.emit(x))
             grid.addWidget(b, 1, i)
             self.buttons[cmd] = b
@@ -999,21 +999,7 @@ class CommandPage(QWidget):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
 
-        # Operator sequence banner (§6)
-        self._op_seq_banner = QFrame()
-        self._op_seq_banner.setStyleSheet(
-            f"QFrame {{ background-color: {c.BG_PANEL}; border: 1px solid {c.BORDER}; border-radius: 4px; }}"
-        )
-        op_lay = QHBoxLayout(self._op_seq_banner)
-        op_lay.setContentsMargins(10, 6, 10, 6)
-        op_text = QLabel(
-            "OPERATOR SEQUENCE:  1. Plug in ground Teensy → header CONNECTED (green)   "
-            "2. Enable (LoRa ON)   3. Ping (wake Rocket)   4. Live (telemetry flows)"
-        )
-        op_text.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        op_text.setStyleSheet(f"color: {c.CYAN}; border: none;")
-        op_lay.addWidget(op_text)
-        lay.addWidget(self._op_seq_banner)
+        # Operator sequence banner removed per spec §8
 
         lay.addLayout(self._vehicle_selector())
 
@@ -1048,7 +1034,7 @@ class CommandPage(QWidget):
 
         self.diagnostics_panel = DiagnosticsPanel()
         self.diagnostics_panel.command_requested.connect(self._send_diagnostics_command)
-        lay.addWidget(self.diagnostics_panel)
+        # Diagnostics & RF Control layout removed per spec §8
 
         self.log_panel = CommandLogPanel(self.centre)
         self.log_panel.resend_requested.connect(self.centre.resend)
@@ -1147,7 +1133,7 @@ class CommandPage(QWidget):
             btn = QPushButton(label)
             btn.setFont(QFont("monospace", 9, QFont.Weight.Bold))
             btn.setMinimumHeight(30)
-            btn.setStyleSheet(ThemeManager.status_button_css("red"))
+            btn.setStyleSheet(ThemeManager.status_button_css("neutral"))
             btn.setToolTip(f"Rocket telemetry frequency: {label} ({freq_str})")
             btn.clicked.connect(lambda _c, c_cmd=cmd, m=mode: self._on_rocket_freq_clicked(c_cmd, m))
             self._rocket_freq_buttons[mode] = btn
@@ -1247,7 +1233,7 @@ class CommandPage(QWidget):
         for key, btn in self._collect_all_buttons().items():
             if btn is None:
                 continue
-            if "CANSAT" in key:
+            if key in ("CANSAT_ORIGINAL", "CANSAT_BACKUP", "FREQ:CANSAT:ORIGINAL", "FREQ:CANSAT:BACKUP"):
                 btn.setStyleSheet(ThemeManager.status_button_css("red"))
                 btn.setToolTip("CanSat link not implemented")
                 btn.setEnabled(False)
@@ -1258,6 +1244,25 @@ class CommandPage(QWidget):
             btn.setStyleSheet(ThemeManager.status_button_css(color))
             if tip:
                 btn.setToolTip(tip)
+
+    def _flash_button(self, key: str, color: str, duration_ms: int = 2000) -> None:
+        all_btns = self._collect_all_buttons()
+        btn = all_btns.get(key)
+        if btn is None:
+            return
+        btn.setStyleSheet(ThemeManager.status_button_css(color))
+        if color == "green":
+            QTimer.singleShot(duration_ms, lambda: self._restore_button(key))
+
+    def _restore_button(self, key: str) -> None:
+        all_btns = self._collect_all_buttons()
+        btn = all_btns.get(key)
+        if btn is not None:
+            if self._backend_client and self._backend_client.button_colors:
+                c = self._backend_client.button_colors.get(key, self._backend_client.default_color)
+                btn.setStyleSheet(ThemeManager.status_button_css(c))
+            else:
+                btn.setStyleSheet(ThemeManager.status_button_css("neutral"))
 
     def _on_backend_state_changed(self, state: dict) -> None:
         armed = state.get("armed", False)
@@ -1290,12 +1295,17 @@ class CommandPage(QWidget):
             self.refresh()
             return
 
+        self._flash_button(key, "yellow")
+
         rec = self.centre.send(self.vehicle, cmd)
         # If CommandCentre._transmit is not wired to supervisor (e.g. standalone test without app.py),
         # transmit directly via backend client with matching sequence number
         is_dummy_transmit = getattr(self.centre._transmit, "__code__", None) == (lambda _t, _c, _s: None).__code__
         if is_dummy_transmit and self._backend_client:
             self._backend_client.send_command(cmd, key, seq=rec.sequence)
+
+        if self.simulator_mode and not self._backend_client:
+            QTimer.singleShot(150, lambda: self._flash_button(key, "green", 2000))
 
         msg = self._command_popup_text(cmd)
         self.notice.emit(msg)
@@ -1695,8 +1705,12 @@ class CommandPage(QWidget):
                     if status == "ACK":
                         self.centre.acknowledge(rec.sequence, raw_line)
                         self.centre.mark_executed(rec.sequence, raw_line)
+                        for a in aliases:
+                            self._flash_button(a, "green", 2000)
                     else:
                         self.centre.reject(rec.sequence, details.get("reason", "NACK"))
+                        for a in aliases:
+                            self._flash_button(a, "red", 2000)
                     break
 
         self.refresh()

@@ -426,7 +426,7 @@ class PacketInspector(QWidget):
         title.setStyleSheet(f"color: {c.CYAN};")
         hdr.addWidget(title)
 
-        self.sub_info = QLabel("SELECT A PACKET TO INSPECT")
+        self.sub_info = QLabel("")
         self.sub_info.setFont(QFont("monospace", 8))
         self.sub_info.setStyleSheet(f"color: {c.TEXT_DIM};")
         hdr.addWidget(self.sub_info)
@@ -955,14 +955,6 @@ class ComPage(QWidget):
 
         row.addStretch()
 
-        self.dev_badge = QLabel("DEV")
-        self.dev_badge.setFont(QFont("monospace", 8, QFont.Weight.Bold))
-        self.dev_badge.setStyleSheet(
-            f"background-color: {c.BG_INPUT}; color: {c.CYAN}; "
-            f"border: 1px solid {c.BORDER}; border-radius: 4px; padding: 3px 8px;"
-        )
-        row.addWidget(self.dev_badge)
-
         self.mode_badge = QLabel(" MODE: LIVE ")
         self.mode_badge.setFont(QFont("monospace", 8, QFont.Weight.Bold))
         self.mode_badge.setStyleSheet(
@@ -1005,7 +997,7 @@ class ComPage(QWidget):
         self.port_val = QLabel("—")
         self.port_val.setFont(QFont("monospace", 8, QFont.Weight.Bold))
         self.port_val.setStyleSheet(f"color: {c.CYAN};")
-        self.port_val.setFixedWidth(80)
+        self.port_val.setMinimumWidth(80)
         grid.addWidget(self.port_val)
 
         grid.addWidget(self._vdivider())
