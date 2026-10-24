@@ -38,7 +38,7 @@ from .parser import IngestResult
 from .commands import CommandCentre
 from .pages.command import CommandPage
 from .pages.com import ComPage
-from .pages.csv_page import CsvPage
+from .pages.csv_manager import CsvManagerPage
 from .pages.experiment import ExperimentPage
 from .pages.overview import OverviewPage
 from .pages.vehicle import VehiclePage
@@ -359,7 +359,7 @@ class GroundStationApp(QMainWindow):
         self.command_page.notice.connect(self._on_notice)
         self.experiment_page = ExperimentPage()
         self.com_page = ComPage()
-        self.csv_page = CsvPage()
+        self.csv_page = CsvManagerPage()
 
         self._build(mode_label)
 
@@ -464,7 +464,7 @@ class GroundStationApp(QMainWindow):
             ("Command", 3, True),
             ("CanSat Experiment", 4, True),
             ("DEV", 5, True),
-            ("CSV", 6, True),
+            ("Flight Logs", 6, True),
         ]
         for text, index, enabled in entries:
             b = NavButton(text)
@@ -483,6 +483,9 @@ class GroundStationApp(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, b in enumerate(self._nav):
             b.setChecked(i == index)
+
+    def _select_page(self, index: int) -> None:
+        self._navigate(index)
 
     # ── link wiring ──────────────────────────────────────────────────────
 
@@ -531,6 +534,21 @@ class GroundStationApp(QMainWindow):
             lambda target, command, sequence:
             supervisor.send_command(target, command, sequence))
 
+    _logs = None
+
+    def set_session_logs(self, logs) -> None:
+        self._logs = logs
+        if hasattr(self, "csv_page"):
+            self.csv_page.set_session_logs(logs)
+
+    def closeEvent(self, event) -> None:
+        if self._logs is not None:
+            try:
+                self._logs.close()
+            except Exception:
+                pass
+        super().closeEvent(event)
+
     _supervisor = None
     _telemetry_connected: bool = False
 
@@ -556,7 +574,6 @@ class GroundStationApp(QMainWindow):
         v = page.receive(packet, result)
         self.overview_page.receive(packet, result, v)
         self.com_page.receive(packet, result, v)
-        self.csv_page.receive_packet(packet, result, v)
         self.experiment_page.receive_packet(packet, result)
 
         if self._supervisor is not None:

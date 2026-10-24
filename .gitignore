@@ -1,5 +1,6 @@
 # Session logs
-logs/
+/logs/
+!ground_station/logs/
 logs_test/
 backend/logs_test/
 scratch/

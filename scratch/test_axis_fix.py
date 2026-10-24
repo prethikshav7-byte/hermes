@@ -1,5 +1,7 @@
 import sys
+# pyrefly: ignore[missing-import]
 from PyQt6.QtWidgets import QApplication
+# pyrefly: ignore[missing-import]
 import pyqtgraph as pg
 
 app = QApplication(sys.argv)

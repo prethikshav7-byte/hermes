@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QFileDialog
 from ground_station.app import GroundStationApp
 from ground_station.launcher import LaunchChoice, LaunchMode, LauncherDialog
 from ground_station.link import BackendBridgeSupervisor, LinkSupervisor, SERIAL_AVAILABLE
-from ground_station.logs.raw_log import SessionLogs
+from ground_station.logs.raw_log import SessionLogs, get_default_storage_dir
 from ground_station.logs.post_flight import PostFlightSource
 from ground_station.simulator.source import SimulatedSource
 from ground_station.theme import ThemeManager
@@ -72,7 +72,7 @@ def main() -> int:
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--backend", default=os.environ.get("GS_BACKEND_URL", "ws://localhost:8765/ws"),
                     help="WebSocket URL for the ground station backend bridge (default ws://localhost:8765/ws)")
-    ap.add_argument("--log-dir", default="logs",
+    ap.add_argument("--log-dir", default=None,
                     help="where session logs are written (§12)")
     args = ap.parse_args()
 
@@ -90,17 +90,22 @@ def main() -> int:
     # Mode label for title and sidebar
     if simulator:
         mode_label = "SIMULATOR MODE"
+        data_source = "SIMULATION"
     elif post_flight:
         mode_label = "POST-FLIGHT SD CARD"
+        data_source = "IMPORTED_ONBOARD"
     else:
         mode_label = "LIVE"
+        data_source = "HARDWARE"
 
     window = GroundStationApp(
         mode_label=mode_label,
         simulator_mode=simulator)
 
-    logs = SessionLogs(args.log_dir)
-    _check_disk_space(args.log_dir, window)
+    target_log_dir = args.log_dir if args.log_dir is not None else get_default_storage_dir()
+    logs = SessionLogs(target_log_dir, data_source=data_source)
+    window.set_session_logs(logs)
+    _check_disk_space(target_log_dir, window)
 
     if simulator:
         source = SimulatedSource()

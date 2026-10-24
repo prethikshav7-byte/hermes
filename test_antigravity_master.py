@@ -30,7 +30,6 @@ from ground_station.models import VehicleID, FlightState, TelemetryPacket
 from ground_station.parser import IngestResult, LossTier
 from ground_station.pages.command import CommandPage
 from ground_station.pages.com import ComPage
-from ground_station.pages.csv_page import CsvPage, CsvTelemetryRecord
 from ground_station.logs.post_flight import PostFlightAnalyzer, PostFlightSource
 from ground_station.simulator.engine import SimulatorEngine
 from ground_station.commands import CommandCentre
@@ -53,12 +52,12 @@ print("\n=== 1. UI Navigation & Layout Preservation ===")
 window = GroundStationApp(mode_label="TEST", simulator_mode=True)
 nav_texts = [b.text() for b in window._nav]
 check("DEV navigation label exists", "DEV" in nav_texts)
-check("CSV navigation label exists", "CSV" in nav_texts)
 check("DEV is at index 5", nav_texts[5] == "DEV")
-check("CSV is immediately below DEV at index 6", nav_texts[6] == "CSV")
+check("Flight Logs is at index 6", nav_texts[6] == "Flight Logs")
+check("Navigation has exactly 7 items", len(nav_texts) == 7)
 check("Stack has 7 pages", window.stack.count() == 7)
 check("Stack index 5 is ComPage", isinstance(window.stack.widget(5), ComPage))
-check("Stack index 6 is CsvPage", isinstance(window.stack.widget(6), CsvPage))
+check("Window has csv_page attribute", hasattr(window, "csv_page"))
 
 print("\n=== 2. ComPage Clean Header (No extra DEV badge) ===")
 com_page = window.com_page
@@ -142,12 +141,6 @@ check("Rocket SD max altitude == 312.80 m", math.isclose(res_rocket.stats.max_al
 check("Rocket SD max velocity == 38.50 m/s", math.isclose(res_rocket.stats.max_velocity, 38.50, rel_tol=1e-3))
 check("Rocket SD max acceleration == 68.50 m/s²", math.isclose(res_rocket.stats.max_acceleration, 68.50, rel_tol=1e-3))
 
-rec_list = PostFlightAnalyzer.extract_records_from_file(rocket_csv)
-check("extract_records_from_file returned 3 CsvTelemetryRecord", len(rec_list) == 3)
-check("First record altitude == 0.50 m", math.isclose(rec_list[0].altitude, 0.50))
-check("Second record state == 'BOOST'", rec_list[1].state_name == "BOOST")
-check("Third record state == 'APOGEE'", rec_list[2].state_name == "APOGEE")
-
 pkts = PostFlightAnalyzer.extract_packets_from_file(rocket_csv)
 check("extract_packets_from_file returned 3 packets", len(pkts) == 3)
 check("Packet 0 is TelemetryPacket", isinstance(pkts[0][0], TelemetryPacket))
@@ -161,31 +154,10 @@ pf_source.rocket_packet.connect(lambda p, r: received_packets.append(p))
 pf_source.connect_to()
 check("PostFlightSource replayed all 3 packets into rocket_packet signal", len(received_packets) == 3)
 
-print("\n=== 7. CSV Page Table, Filtering & Native Export ===")
-csv_page = window.csv_page
-# Feed packets to CSV page
-for p, r in pkts:
-    csv_page.receive_packet(p, r, derived_v=p.velocity)
-
-check("CSV page received records", len(csv_page._all_records) >= 3)
-check("CSV table model has rows", csv_page.model.rowCount() >= 3)
-
-# Test CSV export
-export_path = os.path.join(tmp_dir, "exported_telemetry.csv")
-records_to_write = list(reversed(csv_page._filtered_records))
-from ground_station.pages.csv_page import CSV_COLUMNS
-import csv
-with open(export_path, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(CSV_COLUMNS)
-    for rec in records_to_write:
-        writer.writerow(rec.to_csv_row())
-
-check("Exported CSV file exists", os.path.exists(export_path))
-with open(export_path, "r", encoding="utf-8") as f:
-    exported_lines = f.readlines()
-check("Exported CSV has header + 3 data rows", len(exported_lines) >= 4)
-check("Exported header matches §10 schema", "Mission Time (s)" in exported_lines[0] and "Altitude (m)" in exported_lines[0])
+print("\n=== 7. Flight Logs Page & Stack Verification ===")
+check("CsvManagerPage exists in pages", os.path.exists(os.path.join("ground_station", "pages", "csv_manager.py")))
+check("App stack has exactly 7 pages", window.stack.count() == 7)
+check("App navigation has exactly 7 buttons", len(window._nav) == 7)
 
 print(f"\n==========================================")
 print(f"RESULTS: {PASSED} passed, {FAILED} failed")

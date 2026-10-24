@@ -1,5 +1,6 @@
 import sys
 sys.path.insert(0, ".")
+# pyrefly: ignore[missing-import]
 from PyQt6.QtWidgets import QApplication
 from ground_station.models import VehicleID, FlightState, TelemetryPacket
 from ground_station.parser.parser import IngestResult, LossTier

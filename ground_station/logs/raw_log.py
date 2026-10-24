@@ -133,6 +133,49 @@ class _Sink:
                 self._fh = None
 
 
+def get_default_storage_dir() -> str:
+    """Return platform-aware default storage directory.
+    macOS / Windows: ~/Documents/MACHZONE_GroundStation/sessions
+    Fallback to ./logs if Documents is inaccessible.
+    """
+    home = os.path.expanduser("~")
+    docs = os.path.join(home, "Documents", "MACHZONE_GroundStation", "sessions")
+    try:
+        os.makedirs(docs, exist_ok=True)
+        test_file = os.path.join(docs, ".perm_test")
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        return docs
+    except Exception:
+        fallback = os.path.abspath("logs")
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+
+class DualSink:
+    """Dual-path sink writing simultaneously to session root and ground_station/ subfolder."""
+
+    def __init__(self, paths: List[str], header: str = ""):
+        self.sinks = [_Sink(p, header) for p in paths]
+
+    def write(self, line: str) -> None:
+        for s in self.sinks:
+            s.write(line)
+
+    def flush(self) -> None:
+        for s in self.sinks:
+            s.flush()
+
+    def close(self) -> None:
+        for s in self.sinks:
+            s.close()
+
+    @property
+    def lines_written(self) -> int:
+        return self.sinks[0].lines_written if self.sinks else 0
+
+
 class RawLogSet:
     """§12.1 — one file per vehicle, plus one for receiver and source events.
 
@@ -147,22 +190,26 @@ class RawLogSet:
                  session: Optional[str] = None):
         self.session = session or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.directory = os.path.join(directory, self.session)
+        self.gs_dir = os.path.join(self.directory, "ground_station")
+        os.makedirs(self.directory, exist_ok=True)
+        os.makedirs(self.gs_dir, exist_ok=True)
 
-        self.vehicles: Dict[VehicleID, _Sink] = {}
+        self.vehicles: Dict[VehicleID, DualSink] = {}
         for vid in VehicleID:
-            self.vehicles[vid] = _Sink(
-                os.path.join(self.directory, f"{vid.value.lower()}_raw.log"),
-                header=(f"# {vid.value} raw telemetry — session {self.session}\n"
-                        f"# <host_iso_timestamp>\\t<STATUS>\\t<line as received>\n"
-                        f"# STATUS is OK, or the rejection reason (§4.5/§4.6).\n"
-                        f"# Ground-derived values are NOT in this file (§12.3)."),
-            )
-        self.system = _Sink(
-            os.path.join(self.directory, "receiver_and_source.log"),
-            header=(f"# Receiver heartbeat and source events — "
-                    f"session {self.session}\n"
-                    f"# <host_iso_timestamp>\\t<KIND>\\t<detail>"),
-        )
+            hdr = (f"# {vid.value} raw telemetry — session {self.session}\n"
+                   f"# <host_iso_timestamp>\\t<STATUS>\\t<line as received>\n"
+                   f"# STATUS is OK, or the rejection reason (§4.5/§4.6).\n"
+                   f"# Ground-derived values are NOT in this file (§12.3).")
+            p_root = os.path.join(self.directory, f"{vid.value.lower()}_raw.log")
+            p_gs = os.path.join(self.gs_dir, f"{vid.value.lower()}_raw.log")
+            self.vehicles[vid] = DualSink([p_root, p_gs], header=hdr)
+
+        sys_hdr = (f"# Receiver heartbeat and source events — "
+                   f"session {self.session}\n"
+                   f"# <host_iso_timestamp>\\t<KIND>\\t<detail>")
+        p_sys_root = os.path.join(self.directory, "receiver_and_source.log")
+        p_sys_gs = os.path.join(self.gs_dir, "receiver_and_source.log")
+        self.system = DualSink([p_sys_root, p_sys_gs], header=sys_hdr)
         #: Lines that arrived before their vehicle could be identified.
         self.unattributed = 0
 
@@ -238,12 +285,16 @@ class CommandLog:
     def __init__(self, directory: str = "logs",
                  session: Optional[str] = None):
         self.session = session or datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._sink = _Sink(
-            os.path.join(directory, self.session, "commands.log"),
-            header=(f"# Command log — session {self.session}\n"
-                    f"# <host_iso_timestamp>\\t<EVENT>\\t<seq>\\t<vehicle>"
-                    f"\\t<command>\\t<detail>"),
-        )
+        self.directory = os.path.join(directory, self.session)
+        self.gs_dir = os.path.join(self.directory, "ground_station")
+        os.makedirs(self.directory, exist_ok=True)
+        os.makedirs(self.gs_dir, exist_ok=True)
+        hdr = (f"# Command log — session {self.session}\n"
+               f"# <host_iso_timestamp>\t<EVENT>\t<seq>\t<vehicle>"
+               f"\t<command>\t<detail>")
+        p_root = os.path.join(self.directory, "commands.log")
+        p_gs = os.path.join(self.gs_dir, "commands.log")
+        self._sink = DualSink([p_root, p_gs], header=hdr)
 
     def sent(self, sequence: int, vehicle: str, command: str,
              resend_of: Optional[int] = None) -> None:
@@ -304,15 +355,19 @@ class DerivedLog:
     def __init__(self, directory: str = "logs",
                  session: Optional[str] = None):
         self.session = session or datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._sink = _Sink(
-            os.path.join(directory, self.session, "derived.log"),
-            header=("# GROUND-DERIVED VALUES — NOT MEASUREMENTS.\n"
-                    "# Velocity/descent rate is differentiated from "
-                    "barometric altitude on the ground (§6.4).\n"
-                    "# Nothing in this file came off the vehicle.\n"
-                    "# <host_iso_timestamp>\\t<vehicle>\\t<mission_time>"
-                    "\\t<quantity>\\t<value>"),
-        )
+        self.directory = os.path.join(directory, self.session)
+        self.gs_dir = os.path.join(self.directory, "ground_station")
+        os.makedirs(self.directory, exist_ok=True)
+        os.makedirs(self.gs_dir, exist_ok=True)
+        hdr = ("# GROUND-DERIVED VALUES — NOT MEASUREMENTS.\n"
+               "# Velocity/descent rate is differentiated from "
+               "barometric altitude on the ground (§6.4).\n"
+               "# Nothing in this file came off the vehicle.\n"
+               "# <host_iso_timestamp>\t<vehicle>\t<mission_time>"
+               "\t<quantity>\t<value>")
+        p_root = os.path.join(self.directory, "derived.log")
+        p_gs = os.path.join(self.gs_dir, "derived.log")
+        self._sink = DualSink([p_root, p_gs], header=hdr)
 
     def write(self, vehicle: str, mission_time: float, quantity: str,
               value: Optional[float]) -> None:
@@ -340,18 +395,27 @@ from .sd_log import SDTelemetryLogger
 class SessionLogs:
     """All log files for one session, sharing one directory and timestamp."""
 
-    def __init__(self, directory: str = "logs", keep_derived: bool = True):
-        self.session = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.raw = RawLogSet(directory, self.session)
-        self.commands = CommandLog(directory, self.session)
-        self.sd = SDTelemetryLogger(directory, self.session)
+    def __init__(self, directory: Optional[str] = None, session: Optional[str] = None,
+                 data_source: str = "HARDWARE", keep_derived: bool = True):
+        self.base_dir = directory if directory is not None else get_default_storage_dir()
+        self.session = session or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.data_source = data_source.upper()
+        self.raw = RawLogSet(self.base_dir, self.session)
+        self.commands = CommandLog(self.base_dir, self.session)
+        self.sd = SDTelemetryLogger(self.base_dir, self.session, data_source=self.data_source)
         self.derived: Optional[DerivedLog] = (
-            DerivedLog(directory, self.session) if keep_derived else None)
+            DerivedLog(self.base_dir, self.session) if keep_derived else None)
         self.directory = self.raw.directory
+        self.gs_directory = self.raw.gs_dir
+
+    @property
+    def session_id(self) -> str:
+        return self.session
 
     def flush(self) -> None:
         self.raw.flush()
         self.commands.flush()
+        self.sd.flush()
         if self.derived is not None:
             self.derived.flush()
 
@@ -361,4 +425,5 @@ class SessionLogs:
         self.sd.close()
         if self.derived is not None:
             self.derived.close()
+
 
